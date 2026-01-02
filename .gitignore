@@ -31,3 +31,8 @@ coverage/
 # Temporary files
 *.tmp
 temp/
+
+# claude
+.claude/
+
+.npmignore

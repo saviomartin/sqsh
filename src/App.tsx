@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Text, useApp } from 'ink';
 import {
   Welcome,
@@ -11,33 +11,39 @@ import {
   RemoveInputPrompt,
   AdvancedSettingsPrompt,
   AdvancedSettingsEditor,
+  BatchFileList,
+  BatchProgress,
+  BatchSummary,
 } from './components.js';
 import { CompressionService } from './services/compression.js';
-import { formatBytes, bytesToUnit, getFileSizeUnit } from './utils.js';
+import { formatBytes, bytesToUnit, getFileSizeUnit, calculateTotalSize } from './utils.js';
 import {
   AppStep,
-  FileInfo,
   QualityLevel,
-  CompressionResult,
   CompressionSettings,
   AdvancedSettings,
+  BatchFileInfo,
 } from './types.js';
 
 const THANK_YOU_MESSAGE = 'Thank you for using Sqsh. Just type "sqsh" next time to compress any file.';
 
 export const App: React.FC = () => {
-  const { exit } = useApp();
+  useApp(); // Keep the hook to ensure proper Ink lifecycle
   const [step, setStep] = useState<AppStep>('file-input');
-  const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
+  const [files, setFiles] = useState<BatchFileInfo[]>([]);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [quality, setQuality] = useState<QualityLevel | null>(null);
   const [removeInputFile, setRemoveInputFile] = useState(false);
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedSettings | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<CompressionResult | null>(null);
   const [error, setError] = useState<{ title: string; message: string; instruction?: string } | null>(null);
   const [startTime, setStartTime] = useState(0);
   const [exitWarning, setExitWarning] = useState(false);
   const [showThankYou, setShowThankYou] = useState(false);
+
+  // Helper to check if batch mode (more than 1 file)
+  const isBatchMode = files.length > 1;
+  // Get first file for settings that need a single FileInfo
+  const primaryFile = files.length > 0 ? files[0] : null;
 
   // Handle Ctrl+C gracefully with double-press confirmation
   useEffect(() => {
@@ -70,8 +76,8 @@ export const App: React.FC = () => {
     };
   }, [exitWarning]);
 
-  const handleFileSelected = (file: FileInfo) => {
-    setFileInfo(file);
+  const handleFilesSelected = (selectedFiles: BatchFileInfo[]) => {
+    setFiles(selectedFiles);
     setStep('quality-select');
   };
 
@@ -99,47 +105,78 @@ export const App: React.FC = () => {
     startCompression(settings);
   };
 
-  const startCompression = async (advanced?: AdvancedSettings) => {
-    setStep('compressing');
-    setStartTime(Date.now());
+  // Update a specific file in the batch
+  const updateFile = useCallback((index: number, updates: Partial<BatchFileInfo>) => {
+    setFiles(prev => prev.map((f, i) => i === index ? { ...f, ...updates } : f));
+  }, []);
 
-    if (!fileInfo || !quality) return;
+  // Process a single file in the batch
+  const processFile = useCallback(async (
+    fileIndex: number,
+    compressionService: CompressionService,
+    settings: CompressionSettings
+  ): Promise<void> => {
+    const file = files[fileIndex];
+    if (!file) return;
+
+    // Mark file as compressing
+    updateFile(fileIndex, { status: 'compressing', progress: 0 });
 
     try {
-      const compressionService = new CompressionService();
-      const settings: CompressionSettings = {
-        quality: quality,
-        removeInputFile: removeInputFile,
-        advanced: advanced || advancedSettings || undefined,
-      };
-
-      const compressionResult = await compressionService.compress(
-        fileInfo,
+      const result = await compressionService.compress(
+        file,
         settings,
         (progressInfo) => {
-          setProgress(progressInfo.percentage);
+          updateFile(fileIndex, { progress: progressInfo.percentage });
         }
       );
 
-      setResult(compressionResult);
-      setStep('compress-more');
+      // Mark file as completed with result
+      updateFile(fileIndex, {
+        status: 'completed',
+        progress: 100,
+        result,
+      });
     } catch (err) {
-      setError({
-        title: 'Compression Failed',
-        message: err instanceof Error ? err.message : 'An unknown error occurred',
-        instruction: 'Please check the file and try again.',
+      // Mark file as error but continue with next
+      updateFile(fileIndex, {
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Compression failed',
       });
     }
+  }, [files, updateFile]);
+
+  const startCompression = async (advanced?: AdvancedSettings) => {
+    setStep('compressing');
+    setStartTime(Date.now());
+    setCurrentFileIndex(0);
+
+    if (files.length === 0 || !quality) return;
+
+    const compressionService = new CompressionService();
+    const settings: CompressionSettings = {
+      quality: quality,
+      removeInputFile: removeInputFile,
+      advanced: advanced || advancedSettings || undefined,
+    };
+
+    // Process files sequentially
+    for (let i = 0; i < files.length; i++) {
+      setCurrentFileIndex(i);
+      await processFile(i, compressionService, settings);
+    }
+
+    // All files processed
+    setStep('compress-more');
   };
 
   const handleCompressMore = () => {
     // Reset state for new compression
-    setFileInfo(null);
+    setFiles([]);
+    setCurrentFileIndex(0);
     setQuality(null);
     setRemoveInputFile(false);
     setAdvancedSettings(null);
-    setProgress(0);
-    setResult(null);
     setError(null);
     setStep('file-input');
   };
@@ -152,8 +189,8 @@ export const App: React.FC = () => {
     }, 1000);
   };
 
-  // Show error if FFmpeg is not installed
-  if (error && !fileInfo) {
+  // Show error if FFmpeg is not installed (no files selected yet)
+  if (error && files.length === 0) {
     return (
       <Box flexDirection="column">
         <ErrorBox title={error.title} message={error.message} instruction={error.instruction} />
@@ -166,18 +203,32 @@ export const App: React.FC = () => {
     );
   }
 
+  // Get first file's result for single-file mode
+  const singleResult = files.length === 1 && files[0].result ? files[0].result : null;
+  const totalSize = calculateTotalSize(files);
+
   return (
     <Box flexDirection="column">
       <Welcome />
 
-      {fileInfo && step !== 'file-input' && (
+      {/* Show selected files summary */}
+      {files.length > 0 && step !== 'file-input' && (
         <>
           <Box marginTop={1} />
           <Text>
             <Text color="green">✓</Text>
             <Text> Selected: </Text>
-            <Text color="cyan">{fileInfo.name}</Text>
-            <Text color="#999999"> ({formatBytes(fileInfo.size)} - {fileInfo.type.charAt(0).toUpperCase() + fileInfo.type.slice(1)})</Text>
+            {isBatchMode ? (
+              <>
+                <Text color="cyan">{files.length} files</Text>
+                <Text color="#999999"> ({formatBytes(totalSize)} total - {primaryFile?.type}s)</Text>
+              </>
+            ) : primaryFile && (
+              <>
+                <Text color="cyan">{primaryFile.name}</Text>
+                <Text color="#999999"> ({formatBytes(primaryFile.size)} - {primaryFile.type.charAt(0).toUpperCase() + primaryFile.type.slice(1)})</Text>
+              </>
+            )}
           </Text>
         </>
       )}
@@ -201,7 +252,7 @@ export const App: React.FC = () => {
           <Box marginTop={1} />
           <Text>
             <Text color="green">✓</Text>
-            <Text> Remove original: </Text>
+            <Text> Remove original{isBatchMode ? 's' : ''}: </Text>
             <Text color="cyan">{removeInputFile ? 'Yes' : 'No'}</Text>
           </Text>
         </>
@@ -220,14 +271,14 @@ export const App: React.FC = () => {
               </Text>
             </>
           )}
-          {advancedSettings.targetSize && fileInfo && (
+          {advancedSettings.targetSize && primaryFile && (
             <>
               <Box marginTop={1} />
               <Text>
                 <Text color="green">✓</Text>
                 <Text> Target size: </Text>
                 <Text color="cyan">
-                  {bytesToUnit(advancedSettings.targetSize, getFileSizeUnit(fileInfo.size))} {getFileSizeUnit(fileInfo.size)}
+                  {bytesToUnit(advancedSettings.targetSize, getFileSizeUnit(primaryFile.size))} {getFileSizeUnit(primaryFile.size)}
                 </Text>
               </Text>
             </>
@@ -245,10 +296,10 @@ export const App: React.FC = () => {
         </>
       )}
 
-      {step === 'file-input' && <FileDropper onFileSelected={handleFileSelected} />}
+      {step === 'file-input' && <FileDropper onFilesSelected={handleFilesSelected} />}
 
-      {step === 'quality-select' && fileInfo && (
-        <QualitySelect fileInfo={fileInfo} onSelect={handleQualitySelected} />
+      {step === 'quality-select' && primaryFile && (
+        <QualitySelect fileInfo={primaryFile} onSelect={handleQualitySelected} />
       )}
 
       {step === 'remove-input-prompt' && (
@@ -259,25 +310,47 @@ export const App: React.FC = () => {
         <AdvancedSettingsPrompt onSelect={handleAdvancedSettingsPrompt} />
       )}
 
-      {step === 'advanced-settings' && fileInfo && (
-        <AdvancedSettingsEditor fileInfo={fileInfo} onComplete={handleAdvancedSettingsComplete} />
+      {step === 'advanced-settings' && primaryFile && (
+        <AdvancedSettingsEditor fileInfo={primaryFile} onComplete={handleAdvancedSettingsComplete} />
       )}
 
-      {step === 'compressing' && fileInfo && (
+      {/* Batch mode compression view */}
+      {step === 'compressing' && isBatchMode && (
         <>
-          <Box marginTop={1} />
-          <Progress percentage={progress} fileName={fileInfo.name} startTime={startTime} />
+          <BatchFileList files={files} currentIndex={currentFileIndex} />
+          <BatchProgress files={files} currentIndex={currentFileIndex} startTime={startTime} />
         </>
       )}
 
-      {step === 'compress-more' && result && (
+      {/* Single file compression view */}
+      {step === 'compressing' && !isBatchMode && primaryFile && (
         <>
-          <Summary result={result} />
+          <Box marginTop={1} />
+          <Progress
+            percentage={files[0]?.progress || 0}
+            fileName={primaryFile.name}
+            startTime={startTime}
+          />
+        </>
+      )}
+
+      {/* Batch mode results */}
+      {step === 'compress-more' && isBatchMode && (
+        <>
+          <BatchSummary files={files} startTime={startTime} />
           <CompressMore onConfirm={handleCompressMore} onCancel={handleExit} />
         </>
       )}
 
-      {error && fileInfo && (
+      {/* Single file results */}
+      {step === 'compress-more' && !isBatchMode && singleResult && (
+        <>
+          <Summary result={singleResult} />
+          <CompressMore onConfirm={handleCompressMore} onCancel={handleExit} />
+        </>
+      )}
+
+      {error && files.length > 0 && (
         <Box marginTop={1}>
           <ErrorBox title={error.title} message={error.message} instruction={error.instruction} />
         </Box>

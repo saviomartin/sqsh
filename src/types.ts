@@ -48,6 +48,17 @@ export interface CompressionResult {
   alreadyOptimized?: boolean; // True if compression didn't reduce size (output file deleted)
 }
 
+// Batch processing types
+export type FileStatus = 'pending' | 'compressing' | 'completed' | 'error' | 'skipped';
+
+export interface BatchFileInfo extends FileInfo {
+  id: string;
+  status: FileStatus;
+  progress: number;
+  result?: CompressionResult;
+  error?: string;
+}
+
 export interface ProgressInfo {
   percentage: number;
   elapsed: number;

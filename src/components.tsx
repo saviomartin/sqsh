@@ -3,7 +3,7 @@ import { Box, Text, useInput, useStdout } from 'ink';
 import { ConfirmInput, Spinner } from '@inkjs/ui';
 import path from 'path';
 import stringWidth from 'string-width';
-import { QualityLevel, FileInfo, CompressionResult, AdvancedSettings } from './types';
+import { QualityLevel, FileInfo, CompressionResult, AdvancedSettings, BatchFileInfo } from './types';
 import {
   getFileInfo,
   formatBytes,
@@ -14,6 +14,9 @@ import {
   unitToBytes,
   getFormatOptions,
   isValidDirectory,
+  validateBatchFiles,
+  toBatchFiles,
+  calculateTotalSize,
 } from './utils';
 
 // Divider component that extends to full terminal width
@@ -39,58 +42,216 @@ export const Welcome: React.FC = () => {
   );
 };
 
-// FileDropper component
+// FileDropper component - drag and drop only
 interface FileDropperProps {
-  onFileSelected: (fileInfo: FileInfo) => void;
+  onFilesSelected: (files: BatchFileInfo[]) => void;
 }
 
-export const FileDropper: React.FC<FileDropperProps> = ({ onFileSelected }) => {
+export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => {
   const [error, setError] = useState<string | null>(null);
-  const [inputValue, setInputValue] = useState('');
+  const [droppedFiles, setDroppedFiles] = useState<FileInfo[]>([]);
+
+  // Validate files whenever they change
+  useEffect(() => {
+    if (droppedFiles.length === 0) {
+      setError(null);
+      return;
+    }
+
+    const validation = validateBatchFiles(droppedFiles);
+    if (!validation.valid) {
+      setError(validation.error || 'Invalid files');
+    } else {
+      setError(null);
+    }
+  }, [droppedFiles]);
+
+  // Handle dropped file path
+  const handleFileDrop = (input: string) => {
+    const cleanPath = input.trim().replace(/^["']|["']$/g, '');
+    if (!cleanPath) return;
+
+    const fileInfo = getFileInfo(cleanPath);
+    if (fileInfo) {
+      // Check for duplicates
+      if (!droppedFiles.some(f => f.path === fileInfo.path)) {
+        setDroppedFiles(prev => [...prev, fileInfo]);
+      }
+    }
+  };
+
+  // Remove a file by index
+  const removeFile = (index: number) => {
+    setDroppedFiles(prev => prev.filter((_, i) => i !== index));
+  };
 
   useInput((input, key) => {
+    // Enter: Submit files
     if (key.return) {
-      // Submit the cleaned path
-      const cleanPath = inputValue.trim();
-      if (cleanPath) {
-        const fileInfo = getFileInfo(cleanPath);
-        if (!fileInfo) {
-          setError('File not found or unsupported format');
-          return;
-        }
-        onFileSelected(fileInfo);
+      if (droppedFiles.length === 0) {
+        setError('Drag and drop at least one file');
+        return;
       }
-    } else if (key.backspace || key.delete) {
-      // Handle backspace
-      setInputValue(prev => prev.slice(0, -1));
-    } else if (input && !key.ctrl && !key.meta) {
-      // Strip quotes from input as user types/pastes (but allow Ctrl/Cmd combinations)
+
+      const validation = validateBatchFiles(droppedFiles);
+      if (!validation.valid) {
+        setError(validation.error || 'Invalid files');
+        return;
+      }
+
+      const batchFiles = toBatchFiles(droppedFiles);
+      onFilesSelected(batchFiles);
+      return;
+    }
+
+    // Backspace: Remove last file
+    if (key.backspace || key.delete) {
+      if (droppedFiles.length > 0) {
+        removeFile(droppedFiles.length - 1);
+      }
+      return;
+    }
+
+    // Escape: Clear all files
+    if (key.escape) {
+      setDroppedFiles([]);
+      setError(null);
+      return;
+    }
+
+    // Handle drag and drop input (file paths come as text input)
+    if (input && !key.ctrl && !key.meta) {
       const cleanInput = input.replace(/["']/g, '');
-      setInputValue(prev => prev + cleanInput);
+
+      // Detect multiple file paths in the input
+      // When dragging multiple files, they can come:
+      // 1. Newline separated
+      // 2. Space separated where each path starts with /
+      // 3. Concatenated directly (e.g., /path/one/path/two)
+
+      let paths: string[] = [];
+
+      // First check for newlines
+      if (cleanInput.includes('\n')) {
+        paths = cleanInput.split(/[\n\r]+/).map(p => p.trim()).filter(Boolean);
+      }
+      // Check for multiple paths starting with / separated by space or concatenated
+      else if (cleanInput.startsWith('/')) {
+        // Find all paths that start with / - handles both space-separated and concatenated
+        // Match paths like /Users/... or /path/to/file
+        const pathMatches = cleanInput.match(/\/(?:[^\/\s]*\/)*[^\/\s]+\.[a-zA-Z0-9]+/g);
+        if (pathMatches && pathMatches.length > 0) {
+          paths = pathMatches;
+        } else {
+          // Fallback: try to split by detecting path boundaries
+          // Look for pattern where a new path starts (capital letter after extension)
+          const splitPaths = cleanInput.split(/(?<=\.[a-zA-Z0-9]{2,5})(?=\/)/);
+          paths = splitPaths.filter(p => p.trim());
+        }
+      }
+      // Handle home directory paths
+      else if (cleanInput.startsWith('~')) {
+        const pathMatches = cleanInput.match(/~\/[^\s]+/g);
+        if (pathMatches) {
+          paths = pathMatches;
+        } else {
+          paths = [cleanInput];
+        }
+      }
+      // Handle Windows paths
+      else if (/^[A-Za-z]:[\\/]/.test(cleanInput)) {
+        const pathMatches = cleanInput.match(/[A-Za-z]:[\\/][^\s]+/g);
+        if (pathMatches) {
+          paths = pathMatches;
+        } else {
+          paths = [cleanInput];
+        }
+      }
+
+      // Process all detected paths
+      for (const p of paths) {
+        const trimmedPath = p.trim();
+        if (trimmedPath) {
+          handleFileDrop(trimmedPath);
+        }
+      }
     }
   });
 
-  const displayValue = inputValue.trim().replace(/^["']|["']$/g, '') || '';
-  const showPlaceholder = !inputValue;
+  const totalSize = calculateTotalSize(droppedFiles);
+  const fileType = droppedFiles.length > 0 ? droppedFiles[0].type : null;
+
+  // Truncate filename to fit nicely (max ~40 chars for the name part)
+  const truncateFileName = (name: string, maxLen: number = 40): string => {
+    if (name.length <= maxLen) return name;
+    const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+    const baseName = name.slice(0, name.length - ext.length);
+    const availableLen = maxLen - ext.length - 3; // 3 for "..."
+    if (availableLen < 5) return name.slice(0, maxLen - 3) + '...';
+    return baseName.slice(0, availableLen) + '...' + ext;
+  };
 
   return (
     <Box flexDirection="column">
       <Box marginTop={1}>
         <Divider />
       </Box>
-      <Text color="yellow">📁 Paste file path:</Text>
+
+      {/* Main drop zone message */}
+      <Text color="yellow" bold>📁 Drag and drop your files here</Text>
       <Box marginTop={1}>
-        <Text color="#999999">Supports video, image, and audio files (mp4, jpg, mp3, etc.)</Text>
+        <Text color="#999999">Drop one or multiple files · Supports video, image, and audio</Text>
       </Box>
-      <Box marginTop={1} flexDirection="row" alignItems="center" paddingX={1} borderStyle="round" borderColor="gray">
-        <Text color="white">{'> '}</Text>
-        <Box flexGrow={1}>
-          {showPlaceholder ? (
-            <Text color="#666666">/path/to/your/file</Text>
-          ) : (
-            <Text color="white">{displayValue}</Text>
-          )}
+
+      {/* Dropped files list */}
+      {droppedFiles.length > 0 && (
+        <Box marginTop={1} flexDirection="column">
+          <Box
+            flexDirection="column"
+            paddingX={1}
+            borderStyle="round"
+            borderColor="gray"
+          >
+            {droppedFiles.map((file, index) => (
+              <Text key={file.path}>
+                <Text color="green">{index + 1}. </Text>
+                <Text color="white">{truncateFileName(file.name)}</Text>
+                <Text color="#666666"> ({formatBytes(file.size)})</Text>
+              </Text>
+            ))}
+          </Box>
+
+          {/* Summary */}
+          <Box marginTop={1}>
+            <Text color="green">
+              ✓ {droppedFiles.length} {droppedFiles.length === 1 ? 'file' : 'files'} ready
+              <Text color="#999999"> · {formatBytes(totalSize)} total · {fileType}</Text>
+            </Text>
+          </Box>
         </Box>
+      )}
+
+      {/* Empty state - drop zone hint */}
+      {droppedFiles.length === 0 && (
+        <Box
+          marginTop={1}
+          paddingX={1}
+          borderStyle="round"
+          borderColor="gray"
+        >
+          <Text color="#666666">Drop files here...</Text>
+        </Box>
+      )}
+
+      {/* Instructions */}
+      <Box marginTop={1}>
+        {droppedFiles.length === 0 ? (
+          <Text color="#666666">You can drop as many files as you want</Text>
+        ) : (
+          <Text color="#666666">
+            Drop more files · Backspace to remove last · Enter to continue
+          </Text>
+        )}
       </Box>
 
       {error && (
@@ -505,6 +666,314 @@ export const Summary: React.FC<SummaryProps> = ({ result }) => {
       </Text>
 
       {/* Footer */}
+      <Text color="#ff6b4a" bold>{bottomBorder}</Text>
+    </Box>
+  );
+};
+
+// BatchFileList component - shows files with their status
+interface BatchFileListProps {
+  files: BatchFileInfo[];
+  currentIndex: number;
+}
+
+export const BatchFileList: React.FC<BatchFileListProps> = ({ files, currentIndex }) => {
+  const getStatusIcon = (status: BatchFileInfo['status'], index: number) => {
+    if (index === currentIndex && status === 'compressing') {
+      return <Spinner />;
+    }
+    switch (status) {
+      case 'completed':
+        return <Text color="green">✓</Text>;
+      case 'error':
+        return <Text color="red">✗</Text>;
+      case 'skipped':
+        return <Text color="yellow">⊘</Text>;
+      case 'compressing':
+        return <Text color="cyan">⚙</Text>;
+      default:
+        return <Text color="#666666">○</Text>;
+    }
+  };
+
+  const getResultText = (file: BatchFileInfo) => {
+    if (file.status === 'completed' && file.result) {
+      if (file.result.alreadyOptimized) {
+        return <Text color="#fbbf24">already optimal</Text>;
+      }
+      const savedPct = Math.abs(file.result.savedPercentage);
+      const isSmaller = file.result.savedBytes > 0;
+      return (
+        <Text color={isSmaller ? '#22c55e' : '#ef4444'}>
+          {savedPct.toFixed(0)}% {isSmaller ? 'smaller' : 'larger'}
+        </Text>
+      );
+    }
+    if (file.status === 'compressing') {
+      return <Text color="cyan">{file.progress.toFixed(0)}%</Text>;
+    }
+    if (file.status === 'error') {
+      return <Text color="red">{file.error || 'failed'}</Text>;
+    }
+    return null;
+  };
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {files.map((file, index) => (
+        <Box key={file.id} flexDirection="row" alignItems="center">
+          <Box width={3}>{getStatusIcon(file.status, index)}</Box>
+          <Text color={index === currentIndex ? 'white' : '#999999'}>
+            {file.name}
+          </Text>
+          <Text color="#666666"> ({formatBytes(file.size)})</Text>
+          {getResultText(file) && (
+            <Text color="#666666"> · {getResultText(file)}</Text>
+          )}
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
+// BatchProgress component - shows overall batch progress
+interface BatchProgressProps {
+  files: BatchFileInfo[];
+  currentIndex: number;
+  startTime: number;
+}
+
+export const BatchProgress: React.FC<BatchProgressProps> = ({
+  files,
+  currentIndex,
+  startTime,
+}) => {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  const completedCount = files.filter(f => f.status === 'completed' || f.status === 'error' || f.status === 'skipped').length;
+  const currentFile = files[currentIndex];
+  const overallProgress = ((completedCount + (currentFile?.progress || 0) / 100) / files.length) * 100;
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Box marginTop={1}>
+        <Divider />
+      </Box>
+      <Text color="yellow">
+        Compressing {completedCount + 1} of {files.length} files · {overallProgress.toFixed(0)}% · {formatDuration(elapsed)}
+      </Text>
+      {currentFile && (
+        <Box marginTop={1}>
+          <Spinner label={`${currentFile.name} · ${currentFile.progress.toFixed(0)}%`} />
+        </Box>
+      )}
+    </Box>
+  );
+};
+
+// BatchSummary component - shows aggregate results with proper borders and colors
+interface BatchSummaryProps {
+  files: BatchFileInfo[];
+  startTime: number;
+}
+
+export const BatchSummary: React.FC<BatchSummaryProps> = ({ files, startTime }) => {
+  const { stdout } = useStdout();
+  const terminalWidth = stdout.columns || 80;
+
+  // Fixed box width - consistent sizing
+  const boxWidth = Math.min(terminalWidth - 2, 80);
+  const innerWidth = boxWidth - 4; // Account for "│ " and " │"
+
+  // Helper to calculate padding needed for a line
+  const getPadding = (lineContent: string): string => {
+    const contentWidth = stringWidth(lineContent);
+    const padding = Math.max(0, innerWidth - contentWidth);
+    return ' '.repeat(padding);
+  };
+
+  const emptyLine = ' '.repeat(innerWidth);
+
+  // Calculate stats
+  const successFiles = files.filter(f => f.status === 'completed' && f.result && !f.result.alreadyOptimized);
+  const skippedFiles = files.filter(f => f.status === 'completed' && f.result?.alreadyOptimized);
+  const errorFiles = files.filter(f => f.status === 'error');
+
+  const totalInputSize = files.reduce((sum, f) => sum + f.size, 0);
+  const totalOutputSize = files.reduce((sum, f) => {
+    if (f.result && !f.result.alreadyOptimized) {
+      return sum + f.result.outputSize;
+    }
+    return sum + f.size;
+  }, 0);
+  const totalSaved = totalInputSize - totalOutputSize;
+  const savedPercentage = totalInputSize > 0 ? (totalSaved / totalInputSize) * 100 : 0;
+
+  const duration = (Date.now() - startTime) / 1000;
+  const timeText = duration < 60
+    ? `${duration.toFixed(duration < 1 ? 1 : 0)}s`
+    : formatDuration(duration);
+
+  const inputMB = totalInputSize / (1024 * 1024);
+  const outputMB = totalOutputSize / (1024 * 1024);
+  const savedMB = Math.abs(totalSaved) / (1024 * 1024);
+  const isSmaller = totalSaved > 0;
+
+  // Build borders
+  const headerText = 'Batch Complete!';
+  const topBorder = `╭─ ${headerText} ${'─'.repeat(Math.max(0, boxWidth - headerText.length - 5))}╮`;
+  const midBorder = `├${'─'.repeat(boxWidth - 2)}┤`;
+  const bottomBorder = `╰${'─'.repeat(boxWidth - 2)}╯`;
+
+  // Build line content strings for padding calculation
+  let summaryText = `${successFiles.length} compressed`;
+  if (skippedFiles.length > 0) summaryText += ` · ${skippedFiles.length} already optimal`;
+  if (errorFiles.length > 0) summaryText += ` · ${errorFiles.length} failed`;
+  const line1 = `🎉 ${summaryText}`;
+
+  const line2 = `💾 ${inputMB.toFixed(2)} MB  →  ${outputMB.toFixed(2)} MB  (${isSmaller ? 'saved' : 'added'} ${savedMB.toFixed(2)} MB · ${savedPercentage.toFixed(0)}%)`;
+  const line3 = `⚡ Completed in ${timeText}`;
+
+  // Truncate filename helper for results
+  const truncateForResults = (name: string, maxLen: number): string => {
+    if (stringWidth(name) <= maxLen) return name;
+    const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+    const baseName = name.slice(0, name.length - ext.length);
+    const availableLen = maxLen - ext.length - 3;
+    if (availableLen < 5) return name.slice(0, maxLen - 3) + '...';
+    return baseName.slice(0, availableLen) + '...' + ext;
+  };
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {/* Top border */}
+      <Text color="#ff6b4a" bold>{topBorder}</Text>
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyLine}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Summary line with colors */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#ffd700">🎉 </Text>
+        <Text color="white">{successFiles.length} compressed</Text>
+        {skippedFiles.length > 0 && (
+          <Text color="#fbbf24"> · {skippedFiles.length} already optimal</Text>
+        )}
+        {errorFiles.length > 0 && (
+          <Text color="#ef4444"> · {errorFiles.length} failed</Text>
+        )}
+        <Text>{getPadding(line1)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyLine}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Size line with colors */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#60a5fa">💾 </Text>
+        <Text color="white">{inputMB.toFixed(2)} MB</Text>
+        <Text color="#999999">  →  </Text>
+        <Text color={isSmaller ? '#22c55e' : '#ef4444'} bold>{outputMB.toFixed(2)} MB</Text>
+        <Text color="#999999">  ({isSmaller ? 'saved' : 'added'} </Text>
+        <Text color={isSmaller ? '#22c55e' : '#ef4444'} bold>{savedMB.toFixed(2)} MB · {savedPercentage.toFixed(0)}%</Text>
+        <Text color="#999999">)</Text>
+        <Text>{getPadding(line2)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Time line with colors */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#fbbf24">⚡ </Text>
+        <Text color="white">Completed in </Text>
+        <Text color="#fbbf24" bold>{timeText}</Text>
+        <Text>{getPadding(line3)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyLine}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Middle border */}
+      <Text color="#ff6b4a">{midBorder}</Text>
+
+      {/* Results header */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#999999">Results:</Text>
+        <Text>{getPadding('Results:')}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Per-file results with colors */}
+      {files.map((file) => {
+        const isError = file.status === 'error';
+        const isOptimal = file.result?.alreadyOptimized;
+        const icon = isError ? '✗' : isOptimal ? '⊘' : '✓';
+        const iconColor = isError ? '#ef4444' : isOptimal ? '#fbbf24' : '#22c55e';
+
+        let resultText = '';
+        if (isError) {
+          resultText = file.error || 'failed';
+        } else if (isOptimal) {
+          resultText = 'optimal';
+        } else if (file.result) {
+          const inMB = (file.result.inputSize / (1024 * 1024)).toFixed(1);
+          const outMB = (file.result.outputSize / (1024 * 1024)).toFixed(1);
+          const pct = Math.abs(file.result.savedPercentage).toFixed(0);
+          resultText = `${inMB}→${outMB} MB (-${pct}%)`;
+        }
+
+        // Calculate available space for filename
+        const fixedParts = `  ${icon}   ${resultText}`;
+        const availableForName = innerWidth - stringWidth(fixedParts) - 2;
+        const truncatedName = truncateForResults(file.name, Math.max(20, availableForName));
+        const lineContent = `  ${icon} ${truncatedName}  ${resultText}`;
+
+        return (
+          <Text key={file.id}>
+            <Text color="#ff6b4a">│ </Text>
+            <Text>  </Text>
+            <Text color={iconColor}>{icon} </Text>
+            <Text color="white">{truncatedName}</Text>
+            <Text color="#999999">  {resultText}</Text>
+            <Text>{getPadding(lineContent)}</Text>
+            <Text color="#ff6b4a"> │</Text>
+          </Text>
+        );
+      })}
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyLine}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Bottom border */}
       <Text color="#ff6b4a" bold>{bottomBorder}</Text>
     </Box>
   );

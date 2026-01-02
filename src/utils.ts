@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { FileInfo, FileType, QualityLevel, VideoFormat, ImageFormat, AudioFormat, OutputFormat, AdvancedSettings } from './types.js';
+import { FileInfo, FileType, QualityLevel, VideoFormat, ImageFormat, AudioFormat, OutputFormat, AdvancedSettings, BatchFileInfo } from './types.js';
 
 // Format utilities
 export function formatBytes(bytes: number, decimals = 2): string {
@@ -280,5 +280,51 @@ export function estimateCompressedSize(originalSize: number, quality: QualityLev
   }
   
   return Math.round(originalSize * compressionRatio);
+}
+
+// Batch processing utilities
+
+// Generate a unique ID for batch files
+export function generateBatchId(): string {
+  return Math.random().toString(36).substring(2, 9);
+}
+
+// Validate batch files - all must be same type
+export function validateBatchFiles(files: FileInfo[]): { valid: boolean; error?: string } {
+  if (files.length === 0) {
+    return { valid: false, error: 'No valid files found' };
+  }
+
+  if (files.length === 1) {
+    return { valid: true };
+  }
+
+  const firstType = files[0].type;
+  const allSameType = files.every(f => f.type === firstType);
+
+  if (!allSameType) {
+    const types = [...new Set(files.map(f => f.type))];
+    return {
+      valid: false,
+      error: `All files must be the same type. Found: ${types.join(', ')}`,
+    };
+  }
+
+  return { valid: true };
+}
+
+// Convert FileInfo array to BatchFileInfo array
+export function toBatchFiles(files: FileInfo[]): BatchFileInfo[] {
+  return files.map(file => ({
+    ...file,
+    id: generateBatchId(),
+    status: 'pending' as const,
+    progress: 0,
+  }));
+}
+
+// Calculate total size of files
+export function calculateTotalSize(files: FileInfo[]): number {
+  return files.reduce((total, file) => total + file.size, 0);
 }
 
