@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Text, useInput, useStdout, Static } from 'ink';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Box, Text, useInput, useStdout } from 'ink';
 import { ConfirmInput, Spinner } from '@inkjs/ui';
 import path from 'path';
 import stringWidth from 'string-width';

@@ -23,9 +23,27 @@ Thumbs.db
 
 # Logs
 *.log
+npm-debug.log*
 
 # Environment
 .env
 .env.local
 
-# Only include dist, package.json, README.md, and LICENSE
+# Documentation (only README.md is needed)
+DEVELOPMENT.md
+QUICKSTART.md
+
+# Build artifacts
+*.tsbuildinfo
+
+# Temporary
+*.tmp
+temp/
+
+# Claude
+.claude/
+
+# Lock files (users should generate their own)
+pnpm-lock.yaml
+package-lock.json
+yarn.lock

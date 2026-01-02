@@ -461,18 +461,17 @@ export class CompressionService {
     // Calculate target bitrate: (target bytes * 8) / duration in seconds / 1000 = kbps
     const targetBitrate = Math.max(32, Math.floor((targetSize * 8) / duration / 1000));
 
+    // For lossless formats, we can't target a specific size
+    if (outputFormat === 'flac' || outputFormat === 'wav') {
+      // Fall back to standard compression
+      return this.compressAudio(fileInfo, settings, onProgress);
+    }
+
     return new Promise((resolve, reject) => {
       const command = ffmpeg(fileInfo.path);
       const outputOptions: string[] = [];
 
       outputOptions.push(`-c:a ${codec}`);
-
-      // For lossless formats, we can't target a specific size
-      if (outputFormat === 'flac' || outputFormat === 'wav') {
-        // Fall back to standard compression
-        return this.compressAudio(fileInfo, settings, onProgress).then(resolve).catch(reject);
-      }
-
       outputOptions.push(`-b:a ${targetBitrate}k`);
 
       command
