@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { FileInfo, FileType, QualityLevel } from './types.js';
+import { FileInfo, FileType, QualityLevel, VideoFormat, ImageFormat, OutputFormat, AdvancedSettings } from './types.js';
 
 // Format utilities
 export function formatBytes(bytes: number, decimals = 2): string {
@@ -14,6 +14,28 @@ export function formatBytes(bytes: number, decimals = 2): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
 
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+// Determine if file size should be displayed in KB or MB
+export function getFileSizeUnit(bytes: number): 'KB' | 'MB' {
+  const MB = 1024 * 1024;
+  return bytes < MB ? 'KB' : 'MB';
+}
+
+// Convert bytes to the appropriate unit value
+export function bytesToUnit(bytes: number, unit: 'KB' | 'MB'): number {
+  if (unit === 'KB') {
+    return Math.round(bytes / 1024);
+  }
+  return Math.round((bytes / (1024 * 1024)) * 100) / 100; // 2 decimal places for MB
+}
+
+// Convert unit value back to bytes
+export function unitToBytes(value: number, unit: 'KB' | 'MB'): number {
+  if (unit === 'KB') {
+    return value * 1024;
+  }
+  return value * 1024 * 1024;
 }
 
 export function formatDuration(seconds: number): string {
@@ -89,6 +111,7 @@ export function getFileInfo(filePath: string): FileInfo | null {
       name,
       size: stats.size,
       type,
+      extension: ext.slice(1), // Remove the dot
     };
   } catch (error) {
     return null;
@@ -100,18 +123,71 @@ export function isSupportedFormat(filePath: string): boolean {
   return SUPPORTED_VIDEO_FORMATS.includes(ext) || SUPPORTED_IMAGE_FORMATS.includes(ext);
 }
 
-export function generateOutputPath(inputPath: string): string {
+export function generateOutputPath(inputPath: string, advanced?: AdvancedSettings): string {
   const ext = path.extname(inputPath);
-  const dir = path.dirname(inputPath);
+  const dir = advanced?.outputFolder || path.dirname(inputPath);
   const basename = path.basename(inputPath, ext);
 
-  return path.join(dir, `${basename}-compressed${ext}`);
+  // Use custom format or keep original
+  const outputExt = advanced?.outputFormat ? `.${advanced.outputFormat}` : ext;
+
+  return path.join(dir, `${basename}-compressed${outputExt}`);
+}
+
+// Validate if a directory exists
+export function isValidDirectory(dirPath: string): boolean {
+  try {
+    const cleanPath = dirPath.trim().replace(/^["']|["']$/g, '');
+    return fs.existsSync(cleanPath) && fs.statSync(cleanPath).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export function getSupportedFormats(): string {
   return [...SUPPORTED_VIDEO_FORMATS, ...SUPPORTED_IMAGE_FORMATS]
     .map(ext => ext.replace('.', ''))
     .join(', ');
+}
+
+// Get available output formats based on file type
+export function getVideoFormatOptions(): { value: VideoFormat; label: string; description: string }[] {
+  return [
+    { value: 'mp4', label: 'MP4', description: 'Most compatible, great for sharing' },
+    { value: 'webm', label: 'WebM', description: 'Web-optimized, smaller size' },
+    { value: 'mov', label: 'MOV', description: 'Apple QuickTime format' },
+    { value: 'mkv', label: 'MKV', description: 'High quality, supports many codecs' },
+    { value: 'avi', label: 'AVI', description: 'Legacy format, wide compatibility' },
+  ];
+}
+
+export function getImageFormatOptions(): { value: ImageFormat; label: string; description: string }[] {
+  return [
+    { value: 'jpg', label: 'JPG', description: 'Best for photos, lossy compression' },
+    { value: 'png', label: 'PNG', description: 'Lossless, supports transparency' },
+    { value: 'webp', label: 'WebP', description: 'Modern format, excellent compression' },
+    { value: 'gif', label: 'GIF', description: 'Animated images, limited colors' },
+  ];
+}
+
+export function getFormatOptions(fileType: FileType): { value: OutputFormat; label: string; description: string }[] {
+  if (fileType === 'video') {
+    return getVideoFormatOptions();
+  }
+  return getImageFormatOptions();
+}
+
+// Delete a file safely
+export function deleteFile(filePath: string): boolean {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 // File size prediction based on quality level

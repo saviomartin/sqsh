@@ -1,10 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
-import { Select, TextInput, ConfirmInput, Spinner } from '@inkjs/ui';
+import { ConfirmInput, Spinner } from '@inkjs/ui';
 import path from 'path';
 import stringWidth from 'string-width';
-import { QualityLevel, FileInfo, CompressionResult } from './types';
-import { getFileInfo, formatBytes, formatDuration, estimateCompressedSize } from './utils';
+import { QualityLevel, FileInfo, CompressionResult, AdvancedSettings } from './types';
+import {
+  getFileInfo,
+  formatBytes,
+  formatDuration,
+  estimateCompressedSize,
+  getFileSizeUnit,
+  bytesToUnit,
+  unitToBytes,
+  getFormatOptions,
+  isValidDirectory,
+} from './utils';
 
 // Divider component that extends to full terminal width
 const Divider: React.FC = () => {
@@ -121,7 +131,7 @@ export const QualitySelect: React.FC<QualitySelectProps> = ({ fileInfo, onSelect
   const [selectedIndex, setSelectedIndex] = useState(0);
   const qualityLevels: QualityLevel[] = ['high', 'medium', 'low'];
 
-  useInput((input, key) => {
+  useInput((_input, key) => {
     if (key.upArrow) {
       setSelectedIndex((prev) => (prev > 0 ? prev - 1 : qualityLevels.length - 1));
     } else if (key.downArrow) {
@@ -201,127 +211,188 @@ export const Progress: React.FC<ProgressProps> = ({
   return <Spinner label={label} />;
 };
 
-// Summary component
+// Summary component - Robust and responsive design
 interface SummaryProps {
   result: CompressionResult;
 }
 
+// Helper to truncate path in the middle if too long
+const truncatePath = (filePath: string, maxLength: number): string => {
+  if (stringWidth(filePath) <= maxLength) return filePath;
+
+  const fileName = filePath.split('/').pop() || '';
+  const dirPath = filePath.slice(0, filePath.length - fileName.length - 1);
+
+  // Always show full filename if possible, truncate directory
+  const ellipsis = '...';
+  const availableForDir = maxLength - stringWidth(fileName) - stringWidth(ellipsis) - 1; // -1 for /
+
+  if (availableForDir < 10) {
+    // Not enough space for dir, truncate filename too
+    const halfMax = Math.floor((maxLength - stringWidth(ellipsis)) / 2);
+    return filePath.slice(0, halfMax) + ellipsis + filePath.slice(-halfMax);
+  }
+
+  // Show start of dir path + ... + filename
+  return dirPath.slice(0, availableForDir) + ellipsis + '/' + fileName;
+};
+
+// Helper to truncate text if too long
+const truncateText = (text: string, maxLength: number): string => {
+  if (stringWidth(text) <= maxLength) return text;
+  const ellipsis = '...';
+  return text.slice(0, maxLength - stringWidth(ellipsis)) + ellipsis;
+};
+
 export const Summary: React.FC<SummaryProps> = ({ result }) => {
   const { stdout } = useStdout();
   const terminalWidth = stdout.columns || 80;
-  const boxWidth = Math.min(terminalWidth - 4, 72); // Leave some margin, max 72
-  const contentWidth = boxWidth - 2; // 70 characters for content between borders
   const isMacOS = process.platform === 'darwin';
   const clickInstruction = isMacOS ? '⌘+Click' : 'Ctrl+Click';
-  
-  const savedMB = result.savedBytes / (1024 * 1024);
+
+  // Fixed box width based on terminal - never exceed terminal width
+  const boxWidth = Math.min(terminalWidth - 2, 80); // Max 80, or terminal - 2
+  const innerWidth = boxWidth - 4; // Space for "│ " and " │"
+
+  // Calculate file sizes with fallbacks
+  const savedBytes = Math.abs(result.savedBytes);
+  const savedMB = savedBytes / (1024 * 1024);
   const inputMB = result.inputSize / (1024 * 1024);
   const outputMB = result.outputSize / (1024 * 1024);
-  
-  const fileName = result.outputPath.split('/').pop() || result.outputPath;
-  const originalFileName = fileName.replace('-compressed', '').replace(/\.[^.]+$/, '') + path.extname(result.outputPath);
-  const timeText = result.duration < 60 
-    ? `${result.duration}s` 
-    : formatDuration(result.duration);
-  
+  const isSmaller = result.savedBytes > 0;
+
+  // Safe file name extraction with fallbacks
+  const fileName = result.outputPath.split('/').pop() || 'output';
+  const originalFileName = fileName.replace(/-compressed/g, '').replace(/\.[^.]+$/, '') + path.extname(result.outputPath);
+
+  // Time formatting with fallback
+  const duration = Math.max(0, result.duration);
+  const timeText = duration < 60
+    ? `${duration.toFixed(duration < 1 ? 3 : 0)}s`
+    : formatDuration(duration);
+
   // Determine quality loss text based on saved percentage
-  const qualityText = result.savedPercentage < 10 
-    ? 'with zero quality loss' 
-    : result.savedPercentage < 30 
-    ? 'with minimal quality loss' 
+  const savedPct = Math.abs(result.savedPercentage);
+  const qualityText = savedPct < 10
+    ? 'with zero quality loss'
+    : savedPct < 30
+    ? 'with minimal quality loss'
     : 'with optimized quality';
 
-  // Calculate header and footer line lengths
-  const headerLine = '─'.repeat(Math.max(0, boxWidth - 26)); // Reduce by one dash as requested
-  const footerLine = '─'.repeat(Math.max(0, boxWidth - 2));  // 1 char for prefix + 1 for suffix = 2
+  // Truncate content to fit within box
+  const maxContentWidth = innerWidth - 2; // Extra safety margin
+  const displayFileName = truncateText(originalFileName, maxContentWidth - 20); // Reserve space for "🎉  → XX% smaller"
+  const displayPath = truncatePath(result.outputPath, maxContentWidth - 3); // Reserve space for "📁 "
 
-  // Helper to build a complete colored line with exact padding
-  const buildLine = (content: string, paddingNeeded: number): string => {
-    return content + ' '.repeat(paddingNeeded);
+  // Build content lines for padding calculation (with truncated content)
+  const line1 = `🎉 ${displayFileName} → ${savedPct.toFixed(0)}% ${isSmaller ? 'smaller' : 'larger'}`;
+  const line2 = `💾 ${inputMB.toFixed(2)} MB  →  ${outputMB.toFixed(2)} MB  (${isSmaller ? 'saved' : 'added'} ${savedMB.toFixed(2)} MB)`;
+  const line3 = `⚡ Compressed in ${timeText} ${qualityText}`;
+  const line4 = `📁 ${displayPath}`;
+  const line5 = `   ${clickInstruction} to reveal in Finder`;
+
+  // Create border lines
+  const headerTitle = '╭─ Compression Complete! ';
+  const headerDashes = '─'.repeat(Math.max(0, boxWidth - stringWidth(headerTitle) - 1));
+  const topBorder = headerTitle + headerDashes + '╮';
+  const bottomBorder = '╰' + '─'.repeat(Math.max(0, boxWidth - 2)) + '╯';
+  const emptyInner = ' '.repeat(Math.max(0, innerWidth));
+
+  // Safe padding helper
+  const getPadding = (lineContent: string): string => {
+    const padding = innerWidth - stringWidth(lineContent);
+    return ' '.repeat(Math.max(0, padding));
   };
-
-  // Calculate content strings (what will be displayed)
-  const content1 = ` 🎉 ${originalFileName} → ${result.savedPercentage.toFixed(0)}% smaller`;
-  const content2 = ` 💾 ${inputMB.toFixed(2)} MB  →  ${outputMB.toFixed(2)} MB  (saved ${savedMB.toFixed(2)} MB)`;
-  const content3 = ` ⚡ Compressed in ${timeText} ${qualityText}`;
-  const content4 = ` 📁 ${result.outputPath}`;
-  const content5 = `      ${clickInstruction} to reveal in Finder`;
-  
-  const emptyLine = ' '.repeat(contentWidth);
 
   return (
     <Box flexDirection="column" marginTop={1}>
       {/* Header */}
-      <Text color="#ff6b4a" bold>╭─ Compression Complete! {headerLine}╮</Text>
-      
-      {/* Content Box */}
-      <Box flexDirection="column">
-        {/* Empty line */}
-        <Text color="#ff6b4a">│{emptyLine}│</Text>
-        
-        {/* Success message with percentage */}
-        <Text>
-          <Text color="#ff6b4a">│</Text>
-          <Text color="#ffd700"> 🎉 </Text>
-          <Text color="white">{originalFileName}</Text>
-          <Text color="white"> → </Text>
-          <Text color="#22c55e" bold>{result.savedPercentage.toFixed(0)}% smaller</Text>
-          <Text>{' '.repeat(contentWidth - stringWidth(content1))}</Text>
-          <Text color="#ff6b4a">│</Text>
-        </Text>
-        
-        {/* Empty line */}
-        <Text color="#ff6b4a">│{emptyLine}│</Text>
-        
-        {/* File sizes */}
-        <Text>
-          <Text color="#ff6b4a">│</Text>
-          <Text color="#60a5fa"> 💾 </Text>
-          <Text color="white">{inputMB.toFixed(2)} MB</Text>
-          <Text color="#999999">  →  </Text>
-          <Text color="#22c55e" bold>{outputMB.toFixed(2)} MB</Text>
-          <Text color="#999999">  (saved </Text>
-          <Text color="#3b82f6" bold>{savedMB.toFixed(2)} MB</Text>
-          <Text color="#999999">)</Text>
-          <Text>{' '.repeat(contentWidth - stringWidth(content2))}</Text>
-          <Text color="#ff6b4a">│</Text>
-        </Text>
-        
-        {/* Time and quality */}
-        <Text>
-          <Text color="#ff6b4a">│</Text>
-          <Text color="#fbbf24"> ⚡ </Text>
-          <Text color="white">Compressed in </Text>
-          <Text color="#fbbf24" bold>{timeText}</Text>
-          <Text color="#999999"> {qualityText}</Text>
-          <Text>{' '.repeat(contentWidth - stringWidth(content3))}</Text>
-          <Text color="#ff6b4a">│</Text>
-        </Text>
-        
-        {/* Empty line */}
-        <Text color="#ff6b4a">│{emptyLine}│</Text>
-        
-        {/* Output path */}
-        <Text>
-          <Text color="#ff6b4a">│</Text>
-          <Text color="#60a5fa"> 📁 </Text>
-          <Text color="cyan">{result.outputPath}</Text>
-          <Text>{' '.repeat(contentWidth - stringWidth(content4))}</Text>
-          <Text color="#ff6b4a">│</Text>
-        </Text>
-        
-        {/* Click instruction */}
-        <Text>
-          <Text color="#ff6b4a">│</Text>
-          <Text>      </Text>
-          <Text color="#999999">{clickInstruction} to reveal in Finder</Text>
-          <Text>{' '.repeat(contentWidth - stringWidth(content5))}</Text>
-          <Text color="#ff6b4a">│</Text>
-        </Text>
-      </Box>
-      
+      <Text color="#ff6b4a" bold>{topBorder}</Text>
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyInner}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Success message with percentage */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#ffd700">🎉 </Text>
+        <Text color="white">{displayFileName}</Text>
+        <Text color="white"> → </Text>
+        <Text color={isSmaller ? '#22c55e' : '#ef4444'} bold>{savedPct.toFixed(0)}% {isSmaller ? 'smaller' : 'larger'}</Text>
+        <Text>{getPadding(line1)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyInner}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* File sizes */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#60a5fa">💾 </Text>
+        <Text color="white">{inputMB.toFixed(2)} MB</Text>
+        <Text color="#999999">  →  </Text>
+        <Text color={isSmaller ? '#22c55e' : '#ef4444'} bold>{outputMB.toFixed(2)} MB</Text>
+        <Text color="#999999">  ({isSmaller ? 'saved' : 'added'} </Text>
+        <Text color="#3b82f6" bold>{savedMB.toFixed(2)} MB</Text>
+        <Text color="#999999">)</Text>
+        <Text>{getPadding(line2)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Time and quality */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#fbbf24">⚡ </Text>
+        <Text color="white">Compressed in </Text>
+        <Text color="#fbbf24" bold>{timeText}</Text>
+        <Text color="#999999"> {qualityText}</Text>
+        <Text>{getPadding(line3)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyInner}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Output path */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text color="#60a5fa">📁 </Text>
+        <Text color="cyan">{displayPath}</Text>
+        <Text>{getPadding(line4)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Click instruction */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>   </Text>
+        <Text color="#999999">{clickInstruction} to reveal in Finder</Text>
+        <Text>{getPadding(line5)}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
+      {/* Empty line */}
+      <Text>
+        <Text color="#ff6b4a">│ </Text>
+        <Text>{emptyInner}</Text>
+        <Text color="#ff6b4a"> │</Text>
+      </Text>
+
       {/* Footer */}
-      <Text color="#ff6b4a" bold>╰{footerLine}╯</Text>
+      <Text color="#ff6b4a" bold>{bottomBorder}</Text>
     </Box>
   );
 };
@@ -342,6 +413,332 @@ export const CompressMore: React.FC<CompressMoreProps> = ({ onConfirm, onCancel 
         <Text color="yellow">Compress another file? </Text>
         <ConfirmInput onConfirm={onConfirm} onCancel={onCancel} />
       </Box>
+    </Box>
+  );
+};
+
+// RemoveInputPrompt component
+interface RemoveInputPromptProps {
+  onSelect: (removeInput: boolean) => void;
+}
+
+export const RemoveInputPrompt: React.FC<RemoveInputPromptProps> = ({ onSelect }) => {
+  const [selectedIndex, setSelectedIndex] = useState(1); // Default to No
+  const options = [
+    { label: 'Yes', value: true, description: 'Delete original file after compression' },
+    { label: 'No', value: false, description: 'Keep original file (recommended)' },
+  ];
+
+  useInput((_input, key) => {
+    if (key.upArrow || key.downArrow) {
+      setSelectedIndex((prev) => (prev === 0 ? 1 : 0));
+    } else if (key.return) {
+      onSelect(options[selectedIndex].value);
+    }
+  });
+
+  return (
+    <Box flexDirection="column">
+      <Box marginTop={1}>
+        <Divider />
+      </Box>
+      <Text color="yellow">🗑️  Remove original file after compression?</Text>
+      <Box marginTop={1} flexDirection="column">
+        {options.map((option, index) => {
+          const isSelected = index === selectedIndex;
+          return (
+            <Box key={option.label} flexDirection="row" marginBottom={0}>
+              <Text color={isSelected ? '#a855f7' : 'white'}>
+                {isSelected ? '> ' : '  '}{option.label}
+              </Text>
+              <Text color="#999999"> - {option.description}</Text>
+            </Box>
+          );
+        })}
+      </Box>
+      <Box marginTop={1}>
+        <Text color="#999999">Enter to confirm · ↑/↓ to navigate</Text>
+      </Box>
+    </Box>
+  );
+};
+
+// AdvancedSettingsPrompt component
+interface AdvancedSettingsPromptProps {
+  onSelect: (wantAdvanced: boolean) => void;
+}
+
+export const AdvancedSettingsPrompt: React.FC<AdvancedSettingsPromptProps> = ({ onSelect }) => {
+  const [selectedIndex, setSelectedIndex] = useState(1); // Default to No
+  const options = [
+    { label: 'Yes', value: true, description: 'Configure output folder, target size, format' },
+    { label: 'No', value: false, description: 'Use default settings' },
+  ];
+
+  useInput((_input, key) => {
+    if (key.upArrow || key.downArrow) {
+      setSelectedIndex((prev) => (prev === 0 ? 1 : 0));
+    } else if (key.return) {
+      onSelect(options[selectedIndex].value);
+    }
+  });
+
+  return (
+    <Box flexDirection="column">
+      <Box marginTop={1}>
+        <Divider />
+      </Box>
+      <Text color="yellow">⚙️  Edit advanced settings?</Text>
+      <Box marginTop={1} flexDirection="column">
+        {options.map((option, index) => {
+          const isSelected = index === selectedIndex;
+          return (
+            <Box key={option.label} flexDirection="row" marginBottom={0}>
+              <Text color={isSelected ? '#a855f7' : 'white'}>
+                {isSelected ? '> ' : '  '}{option.label}
+              </Text>
+              <Text color="#999999"> - {option.description}</Text>
+            </Box>
+          );
+        })}
+      </Box>
+      <Box marginTop={1}>
+        <Text color="#999999">Enter to confirm · ↑/↓ to navigate</Text>
+      </Box>
+    </Box>
+  );
+};
+
+// AdvancedSettingsEditor component
+type AdvancedStep = 'output-folder' | 'target-size' | 'file-format';
+
+interface AdvancedSettingsEditorProps {
+  fileInfo: FileInfo;
+  onComplete: (settings: AdvancedSettings) => void;
+}
+
+export const AdvancedSettingsEditor: React.FC<AdvancedSettingsEditorProps> = ({
+  fileInfo,
+  onComplete,
+}) => {
+  const [step, setStep] = useState<AdvancedStep>('output-folder');
+  const [outputFolder, setOutputFolder] = useState<string | null>(null);
+  const [folderInput, setFolderInput] = useState('');
+  const [folderError, setFolderError] = useState<string | null>(null);
+
+  // Target size state
+  const sizeUnit = getFileSizeUnit(fileInfo.size);
+  const currentSize = bytesToUnit(fileInfo.size, sizeUnit);
+  const [targetSizeInput, setTargetSizeInput] = useState('');
+  const [targetSize, setTargetSize] = useState<number | null>(null);
+  const [sizeError, setSizeError] = useState<string | null>(null);
+
+  // Format state - default to current format
+  const formatOptions = getFormatOptions(fileInfo.type);
+  const currentFormatIndex = formatOptions.findIndex(f => f.value === fileInfo.extension);
+  const [selectedFormatIndex, setSelectedFormatIndex] = useState(currentFormatIndex >= 0 ? currentFormatIndex : 0);
+
+  const inputDir = path.dirname(fileInfo.path);
+
+  // Output Folder Step
+  const handleFolderInput = (input: string, key: any) => {
+    if (key.return) {
+      const cleanPath = folderInput.trim().replace(/^["']|["']$/g, '');
+      if (!cleanPath) {
+        // Empty means use default (same as input)
+        setOutputFolder(null);
+        setStep('target-size');
+      } else if (isValidDirectory(cleanPath)) {
+        setOutputFolder(cleanPath);
+        setStep('target-size');
+      } else {
+        setFolderError('Invalid directory path');
+      }
+    } else if (key.backspace || key.delete) {
+      setFolderInput(prev => prev.slice(0, -1));
+      setFolderError(null);
+    } else if (input && !key.ctrl && !key.meta) {
+      const cleanInput = input.replace(/["']/g, '');
+      setFolderInput(prev => prev + cleanInput);
+      setFolderError(null);
+    }
+  };
+
+  // Target Size Step
+  const handleTargetSizeInput = (input: string, key: any) => {
+    if (key.return) {
+      const value = targetSizeInput.trim();
+      if (!value) {
+        // Empty means no target size
+        setTargetSize(null);
+        setStep('file-format');
+      } else {
+        const numValue = parseFloat(value);
+        if (isNaN(numValue) || numValue <= 0) {
+          setSizeError('Please enter a valid positive number');
+        } else if (numValue >= currentSize) {
+          setSizeError(`Target must be smaller than ${currentSize} ${sizeUnit}`);
+        } else {
+          setTargetSize(unitToBytes(numValue, sizeUnit));
+          setStep('file-format');
+        }
+      }
+    } else if (key.backspace || key.delete) {
+      setTargetSizeInput(prev => prev.slice(0, -1));
+      setSizeError(null);
+    } else if (input && !key.ctrl && !key.meta && /[\d.]/.test(input)) {
+      setTargetSizeInput(prev => prev + input);
+      setSizeError(null);
+    }
+  };
+
+  // Format Step
+  const handleFormatInput = (_input: string, key: any) => {
+    if (key.upArrow) {
+      setSelectedFormatIndex(prev => (prev > 0 ? prev - 1 : formatOptions.length - 1));
+    } else if (key.downArrow) {
+      setSelectedFormatIndex(prev => (prev < formatOptions.length - 1 ? prev + 1 : 0));
+    } else if (key.return) {
+      const selectedFormat = formatOptions[selectedFormatIndex].value;
+      // If selecting current format, pass null (no conversion needed)
+      const outputFormat = selectedFormat === fileInfo.extension ? null : selectedFormat;
+
+      // Complete with all settings
+      onComplete({
+        outputFolder,
+        targetSize,
+        targetSizeUnit: sizeUnit,
+        outputFormat,
+      });
+    }
+  };
+
+  // Use the appropriate handler based on step
+  useInput((input, key) => {
+    if (step === 'output-folder') {
+      handleFolderInput(input, key);
+    } else if (step === 'target-size') {
+      handleTargetSizeInput(input, key);
+    } else if (step === 'file-format') {
+      handleFormatInput(input, key);
+    }
+  });
+
+  return (
+    <Box flexDirection="column">
+      <Box marginTop={1}>
+        <Divider />
+      </Box>
+      <Text color="yellow" bold>⚙️  Advanced Settings</Text>
+
+      {/* Step 1: Output Folder */}
+      {step === 'output-folder' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="cyan">📁 Output folder:</Text>
+          <Box marginTop={1}>
+            <Text color="#999999">Drag and drop folder or paste path (Enter to keep same as input)</Text>
+          </Box>
+          <Box marginTop={1} flexDirection="row" alignItems="center" paddingX={1} borderStyle="round" borderColor="gray">
+            <Text color="white">{'> '}</Text>
+            <Box flexGrow={1}>
+              {!folderInput ? (
+                <Text color="#666666">{inputDir}</Text>
+              ) : (
+                <Text color="white">{folderInput}</Text>
+              )}
+            </Box>
+          </Box>
+          {folderError && (
+            <Box marginTop={1}>
+              <Text color="red">✗ {folderError}</Text>
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {/* Show completed output folder */}
+      {step !== 'output-folder' && (
+        <Box marginTop={1}>
+          <Text>
+            <Text color="green">✓</Text>
+            <Text> Output folder: </Text>
+            <Text color="cyan">{outputFolder || inputDir}</Text>
+          </Text>
+        </Box>
+      )}
+
+      {/* Step 2: Target Size */}
+      {step === 'target-size' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="cyan">📊 Target file size ({sizeUnit}):</Text>
+          <Box marginTop={1}>
+            <Text color="#999999">
+              Current size: <Text color="white">{currentSize} {sizeUnit}</Text>
+            </Text>
+          </Box>
+          <Box marginTop={1} flexDirection="row" alignItems="center" paddingX={1} borderStyle="round" borderColor="gray">
+            <Text color="white">{'> '}</Text>
+            <Box flexGrow={1}>
+              {!targetSizeInput ? (
+                <Text color="#666666">Press Enter to skip</Text>
+              ) : (
+                <Text color="white">{targetSizeInput}</Text>
+              )}
+            </Box>
+            <Text color="#999999"> {sizeUnit}</Text>
+          </Box>
+          {sizeError && (
+            <Box marginTop={1}>
+              <Text color="red">✗ {sizeError}</Text>
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {/* Show completed target size */}
+      {step === 'file-format' && (
+        <Box marginTop={1}>
+          <Text>
+            <Text color="green">✓</Text>
+            <Text> Target size: </Text>
+            <Text color="cyan">
+              {targetSize
+                ? `${bytesToUnit(targetSize, sizeUnit)} ${sizeUnit}`
+                : 'Auto (based on quality)'}
+            </Text>
+          </Text>
+        </Box>
+      )}
+
+      {/* Step 3: File Format */}
+      {step === 'file-format' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="cyan">🎬 Output format:</Text>
+          <Box marginTop={1} flexDirection="column">
+            {formatOptions.map((format, index) => {
+              const isSelected = selectedFormatIndex === index;
+              const isCurrent = format.value === fileInfo.extension;
+              // Highlight: purple if selected, gold if current (not selected), white otherwise
+              const labelColor = isSelected ? '#a855f7' : isCurrent ? '#fbbf24' : 'white';
+              return (
+                <Box key={format.value} flexDirection="row" marginBottom={1}>
+                  <Text color={labelColor}>
+                    {isSelected ? '> ' : '  '}{index + 1}. {format.label}
+                  </Text>
+                  {isCurrent ? (
+                    <Text color="#fbbf24"> - {format.description} (current)</Text>
+                  ) : (
+                    <Text color="#999999"> - {format.description}</Text>
+                  )}
+                </Box>
+              );
+            })}
+          </Box>
+          <Box marginTop={1}>
+            <Text color="#999999">Enter to confirm · ↑/↓ to navigate</Text>
+          </Box>
+        </Box>
+      )}
     </Box>
   );
 };

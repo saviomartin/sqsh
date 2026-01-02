@@ -8,15 +8,19 @@ import {
   Summary,
   CompressMore,
   ErrorBox,
+  RemoveInputPrompt,
+  AdvancedSettingsPrompt,
+  AdvancedSettingsEditor,
 } from './components.js';
 import { CompressionService } from './services/compression.js';
-import { checkFFmpegInstalled, getFFmpegInstallInstructions, formatBytes } from './utils.js';
+import { checkFFmpegInstalled, getFFmpegInstallInstructions, formatBytes, bytesToUnit, getFileSizeUnit } from './utils.js';
 import {
   AppStep,
   FileInfo,
   QualityLevel,
   CompressionResult,
   CompressionSettings,
+  AdvancedSettings,
 } from './types.js';
 
 const THANK_YOU_MESSAGE = 'Thank you for using Sqsh. Just type "sqsh" next time to compress any file.';
@@ -26,6 +30,8 @@ export const App: React.FC = () => {
   const [step, setStep] = useState<AppStep>('file-input');
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
   const [quality, setQuality] = useState<QualityLevel | null>(null);
+  const [removeInputFile, setRemoveInputFile] = useState(false);
+  const [advancedSettings, setAdvancedSettings] = useState<AdvancedSettings | null>(null);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<CompressionResult | null>(null);
   const [error, setError] = useState<{ title: string; message: string; instruction?: string } | null>(null);
@@ -80,17 +86,42 @@ export const App: React.FC = () => {
     setStep('quality-select');
   };
 
-  const handleQualitySelected = async (selectedQuality: QualityLevel) => {
+  const handleQualitySelected = (selectedQuality: QualityLevel) => {
     setQuality(selectedQuality);
+    setStep('remove-input-prompt');
+  };
+
+  const handleRemoveInputSelected = (remove: boolean) => {
+    setRemoveInputFile(remove);
+    setStep('advanced-settings-prompt');
+  };
+
+  const handleAdvancedSettingsPrompt = (wantAdvanced: boolean) => {
+    if (wantAdvanced) {
+      setStep('advanced-settings');
+    } else {
+      // Start compression with default settings
+      startCompression();
+    }
+  };
+
+  const handleAdvancedSettingsComplete = (settings: AdvancedSettings) => {
+    setAdvancedSettings(settings);
+    startCompression(settings);
+  };
+
+  const startCompression = async (advanced?: AdvancedSettings) => {
     setStep('compressing');
     setStartTime(Date.now());
 
-    if (!fileInfo) return;
+    if (!fileInfo || !quality) return;
 
     try {
       const compressionService = new CompressionService();
       const settings: CompressionSettings = {
-        quality: selectedQuality,
+        quality: quality,
+        removeInputFile: removeInputFile,
+        advanced: advanced || advancedSettings || undefined,
       };
 
       const compressionResult = await compressionService.compress(
@@ -116,6 +147,8 @@ export const App: React.FC = () => {
     // Reset state for new compression
     setFileInfo(null);
     setQuality(null);
+    setRemoveInputFile(false);
+    setAdvancedSettings(null);
     setProgress(0);
     setResult(null);
     setError(null);
@@ -173,10 +206,72 @@ export const App: React.FC = () => {
         </>
       )}
 
+      {/* Show remove input selection */}
+      {step !== 'file-input' && step !== 'quality-select' && step !== 'remove-input-prompt' && (
+        <>
+          <Box marginTop={1} />
+          <Text>
+            <Text color="green">✓</Text>
+            <Text> Remove original: </Text>
+            <Text color="cyan">{removeInputFile ? 'Yes' : 'No'}</Text>
+          </Text>
+        </>
+      )}
+
+      {/* Show advanced settings summary - each on its own line */}
+      {advancedSettings && step !== 'advanced-settings' && step !== 'advanced-settings-prompt' && (
+        <>
+          {advancedSettings.outputFolder && (
+            <>
+              <Box marginTop={1} />
+              <Text>
+                <Text color="green">✓</Text>
+                <Text> Output folder: </Text>
+                <Text color="cyan">{advancedSettings.outputFolder}</Text>
+              </Text>
+            </>
+          )}
+          {advancedSettings.targetSize && fileInfo && (
+            <>
+              <Box marginTop={1} />
+              <Text>
+                <Text color="green">✓</Text>
+                <Text> Target size: </Text>
+                <Text color="cyan">
+                  {bytesToUnit(advancedSettings.targetSize, getFileSizeUnit(fileInfo.size))} {getFileSizeUnit(fileInfo.size)}
+                </Text>
+              </Text>
+            </>
+          )}
+          {advancedSettings.outputFormat && (
+            <>
+              <Box marginTop={1} />
+              <Text>
+                <Text color="green">✓</Text>
+                <Text> Output format: </Text>
+                <Text color="cyan">.{advancedSettings.outputFormat}</Text>
+              </Text>
+            </>
+          )}
+        </>
+      )}
+
       {step === 'file-input' && <FileDropper onFileSelected={handleFileSelected} />}
 
       {step === 'quality-select' && fileInfo && (
         <QualitySelect fileInfo={fileInfo} onSelect={handleQualitySelected} />
+      )}
+
+      {step === 'remove-input-prompt' && (
+        <RemoveInputPrompt onSelect={handleRemoveInputSelected} />
+      )}
+
+      {step === 'advanced-settings-prompt' && (
+        <AdvancedSettingsPrompt onSelect={handleAdvancedSettingsPrompt} />
+      )}
+
+      {step === 'advanced-settings' && fileInfo && (
+        <AdvancedSettingsEditor fileInfo={fileInfo} onComplete={handleAdvancedSettingsComplete} />
       )}
 
       {step === 'compressing' && fileInfo && (
