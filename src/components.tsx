@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { ConfirmInput, Spinner } from '@inkjs/ui';
 import path from 'path';
@@ -6,6 +6,8 @@ import stringWidth from 'string-width';
 import { QualityLevel, FileInfo, CompressionResult, AdvancedSettings, BatchFileInfo } from './types';
 import {
   getFileInfo,
+  getFilesFromFolder,
+  isDirectory,
   formatBytes,
   formatDuration,
   estimateCompressedSize,
@@ -18,6 +20,7 @@ import {
   toBatchFiles,
   calculateTotalSize,
 } from './utils';
+
 
 // Divider component that extends to full terminal width
 const Divider: React.FC = () => {
@@ -32,17 +35,22 @@ const Divider: React.FC = () => {
 
 // Welcome component
 export const Welcome: React.FC = () => {
+  const asciiArt = `                                        
+█▀▀▀ █▀▀█ █▀▀▀ █░░█
+▀▀▀█ █░░█ ▀▀▀█ █▀▀█
+▀▀▀▀ ▀▀▀█ ▀▀▀▀ █░░█`;
+
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold color="#ff6b4a">
-        Sqsh
+      <Text color="#ff6b4a">
+        {asciiArt}
       </Text>
       <Text color="#999999">Fast video, image & audio compression for your terminal</Text>
     </Box>
   );
 };
 
-// FileDropper component - drag and drop only
+// FileDropper component - single file or folder drop
 interface FileDropperProps {
   onFilesSelected: (files: BatchFileInfo[]) => void;
 }
@@ -50,6 +58,8 @@ interface FileDropperProps {
 export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => {
   const [error, setError] = useState<string | null>(null);
   const [droppedFiles, setDroppedFiles] = useState<FileInfo[]>([]);
+  const [inputValue, setInputValue] = useState('');
+  const [folderName, setFolderName] = useState<string | null>(null);
 
   // Validate files whenever they change
   useEffect(() => {
@@ -66,114 +76,106 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
     }
   }, [droppedFiles]);
 
-  // Handle dropped file path
-  const handleFileDrop = (input: string) => {
-    const cleanPath = input.trim().replace(/^["']|["']$/g, '');
+  // Process a dropped path - could be a file or folder
+  const processPath = useCallback((rawPath: string) => {
+    const cleanPath = rawPath.trim().replace(/^["']|["']$/g, '');
     if (!cleanPath) return;
 
+    // Check if it's a directory
+    if (isDirectory(cleanPath)) {
+      const folderFiles = getFilesFromFolder(cleanPath);
+      
+      if (folderFiles.length === 0) {
+        setError('No supported files found in folder');
+        return;
+      }
+      
+      // Set all files from the folder
+      setDroppedFiles(folderFiles);
+      setFolderName(cleanPath.split('/').pop() || 'folder');
+      setError(null);
+      return;
+    }
+
+    // It's a single file
     const fileInfo = getFileInfo(cleanPath);
     if (fileInfo) {
       // Check for duplicates
-      if (!droppedFiles.some(f => f.path === fileInfo.path)) {
-        setDroppedFiles(prev => [...prev, fileInfo]);
-      }
+      setDroppedFiles(prev => {
+        if (prev.some(f => f.path === fileInfo.path)) {
+          return prev;
+        }
+        return [...prev, fileInfo];
+      });
+      setFolderName(null);
     }
-  };
+  }, []);
 
   // Remove a file by index
-  const removeFile = (index: number) => {
+  const removeFile = useCallback((index: number) => {
     setDroppedFiles(prev => prev.filter((_, i) => i !== index));
-  };
+    if (droppedFiles.length <= 1) {
+      setFolderName(null);
+    }
+  }, [droppedFiles.length]);
 
   useInput((input, key) => {
     // Enter: Submit files
     if (key.return) {
-      if (droppedFiles.length === 0) {
-        setError('Drag and drop at least one file');
-        return;
+      // Process any pending input first
+      if (inputValue.trim()) {
+        processPath(inputValue);
+        setInputValue('');
       }
+      
+      // Small delay to let state update
+      setTimeout(() => {
+        if (droppedFiles.length === 0) {
+          setError('Drop a file or folder first');
+          return;
+        }
 
-      const validation = validateBatchFiles(droppedFiles);
-      if (!validation.valid) {
-        setError(validation.error || 'Invalid files');
-        return;
-      }
+        const validation = validateBatchFiles(droppedFiles);
+        if (!validation.valid) {
+          setError(validation.error || 'Invalid files');
+          return;
+        }
 
-      const batchFiles = toBatchFiles(droppedFiles);
-      onFilesSelected(batchFiles);
+        const batchFiles = toBatchFiles(droppedFiles);
+        onFilesSelected(batchFiles);
+      }, 10);
       return;
     }
 
-    // Backspace: Remove last file
+    // Backspace: Remove last file or clear input
     if (key.backspace || key.delete) {
-      if (droppedFiles.length > 0) {
+      if (inputValue.length > 0) {
+        setInputValue(prev => prev.slice(0, -1));
+      } else if (droppedFiles.length > 0) {
         removeFile(droppedFiles.length - 1);
       }
       return;
     }
 
-    // Escape: Clear all files
+    // Escape: Clear everything
     if (key.escape) {
       setDroppedFiles([]);
+      setInputValue('');
+      setFolderName(null);
       setError(null);
       return;
     }
 
-    // Handle drag and drop input (file paths come as text input)
+    // Regular text input - accumulate for path
     if (input && !key.ctrl && !key.meta) {
-      const cleanInput = input.replace(/["']/g, '');
-
-      // Detect multiple file paths in the input
-      // When dragging multiple files, they can come:
-      // 1. Newline separated
-      // 2. Space separated where each path starts with /
-      // 3. Concatenated directly (e.g., /path/one/path/two)
-
-      let paths: string[] = [];
-
-      // First check for newlines
-      if (cleanInput.includes('\n')) {
-        paths = cleanInput.split(/[\n\r]+/).map(p => p.trim()).filter(Boolean);
-      }
-      // Check for multiple paths starting with / separated by space or concatenated
-      else if (cleanInput.startsWith('/')) {
-        // Find all paths that start with / - handles both space-separated and concatenated
-        // Match paths like /Users/... or /path/to/file
-        const pathMatches = cleanInput.match(/\/(?:[^\/\s]*\/)*[^\/\s]+\.[a-zA-Z0-9]+/g);
-        if (pathMatches && pathMatches.length > 0) {
-          paths = pathMatches;
-        } else {
-          // Fallback: try to split by detecting path boundaries
-          // Look for pattern where a new path starts (capital letter after extension)
-          const splitPaths = cleanInput.split(/(?<=\.[a-zA-Z0-9]{2,5})(?=\/)/);
-          paths = splitPaths.filter(p => p.trim());
-        }
-      }
-      // Handle home directory paths
-      else if (cleanInput.startsWith('~')) {
-        const pathMatches = cleanInput.match(/~\/[^\s]+/g);
-        if (pathMatches) {
-          paths = pathMatches;
-        } else {
-          paths = [cleanInput];
-        }
-      }
-      // Handle Windows paths
-      else if (/^[A-Za-z]:[\\/]/.test(cleanInput)) {
-        const pathMatches = cleanInput.match(/[A-Za-z]:[\\/][^\s]+/g);
-        if (pathMatches) {
-          paths = pathMatches;
-        } else {
-          paths = [cleanInput];
-        }
-      }
-
-      // Process all detected paths
-      for (const p of paths) {
-        const trimmedPath = p.trim();
-        if (trimmedPath) {
-          handleFileDrop(trimmedPath);
-        }
+      const newValue = inputValue + input;
+      setInputValue(newValue);
+      
+      // Check if we have a complete path (ends with supported extension or is a directory)
+      const cleanPath = newValue.trim().replace(/^["']|["']$/g, '');
+      if (cleanPath && (getFileInfo(cleanPath) || isDirectory(cleanPath))) {
+        processPath(cleanPath);
+        setInputValue('');
       }
     }
   });
@@ -198,14 +200,21 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
       </Box>
 
       {/* Main drop zone message */}
-      <Text color="yellow" bold>📁 Drag and drop your files here</Text>
+      <Text color="yellow" bold>📁 Drop a file or folder</Text>
       <Box marginTop={1}>
-        <Text color="#999999">Drop one or multiple files · Supports video, image, and audio</Text>
+        <Text color="#999999">Drop files one by one, or a folder for batch processing</Text>
       </Box>
 
       {/* Dropped files list */}
       {droppedFiles.length > 0 && (
         <Box marginTop={1} flexDirection="column">
+          {/* Show folder name if files came from a folder */}
+          {folderName && (
+            <Box marginBottom={1}>
+              <Text color="cyan">📂 {folderName}/</Text>
+            </Box>
+          )}
+          
           <Box
             flexDirection="column"
             paddingX={1}
@@ -214,7 +223,7 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
           >
             {droppedFiles.map((file, index) => (
               <Text key={file.path}>
-                <Text color="green">{index + 1}. </Text>
+                <Text color={droppedFiles.length > 1 ? "#666666" : "green"}>{index + 1}. </Text>
                 <Text color="white">{truncateFileName(file.name)}</Text>
                 <Text color="#666666"> ({formatBytes(file.size)})</Text>
               </Text>
@@ -239,17 +248,17 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
           borderStyle="round"
           borderColor="gray"
         >
-          <Text color="#666666">Drop files here...</Text>
+          <Text color="#666666">Drop file or folder here...</Text>
         </Box>
       )}
 
       {/* Instructions */}
       <Box marginTop={1}>
         {droppedFiles.length === 0 ? (
-          <Text color="#666666">You can drop as many files as you want</Text>
+          <Text color="#666666">Tip: Drop a folder to compress all files inside</Text>
         ) : (
           <Text color="#666666">
-            Drop more files · Backspace to remove last · Enter to continue
+            Drop another file · Backspace to remove · Enter to continue
           </Text>
         )}
       </Box>

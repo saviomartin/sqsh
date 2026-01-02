@@ -126,6 +126,54 @@ export function isSupportedFormat(filePath: string): boolean {
   return SUPPORTED_VIDEO_FORMATS.includes(ext) || SUPPORTED_IMAGE_FORMATS.includes(ext) || SUPPORTED_AUDIO_FORMATS.includes(ext);
 }
 
+// Get all supported files from a folder (non-recursive)
+export function getFilesFromFolder(folderPath: string): FileInfo[] {
+  try {
+    const cleanPath = folderPath.trim().replace(/^["']|["']$/g, '');
+    
+    if (!fs.existsSync(cleanPath)) {
+      return [];
+    }
+    
+    const stats = fs.statSync(cleanPath);
+    if (!stats.isDirectory()) {
+      return [];
+    }
+    
+    const files: FileInfo[] = [];
+    const entries = fs.readdirSync(cleanPath);
+    
+    for (const entry of entries) {
+      // Skip hidden files
+      if (entry.startsWith('.')) continue;
+      
+      const fullPath = path.join(cleanPath, entry);
+      const fileInfo = getFileInfo(fullPath);
+      
+      if (fileInfo) {
+        files.push(fileInfo);
+      }
+    }
+    
+    // Sort by name
+    files.sort((a, b) => a.name.localeCompare(b.name));
+    
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+// Check if a path is a directory
+export function isDirectory(filePath: string): boolean {
+  try {
+    const cleanPath = filePath.trim().replace(/^["']|["']$/g, '');
+    return fs.existsSync(cleanPath) && fs.statSync(cleanPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function generateOutputPath(inputPath: string, advanced?: AdvancedSettings): string {
   const ext = path.extname(inputPath);
   const dir = advanced?.outputFolder || path.dirname(inputPath);
