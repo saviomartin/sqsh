@@ -30,6 +30,14 @@ const IMAGE_QUALITY: Record<QualityLevel, number> = {
   custom: 5,
 };
 
+// Audio quality settings (bitrate in kbps)
+const AUDIO_SETTINGS: Record<QualityLevel, { bitrate: number }> = {
+  high: { bitrate: 320 },
+  medium: { bitrate: 192 },
+  low: { bitrate: 128 },
+  custom: { bitrate: 192 },
+};
+
 // Video codec mapping for different output formats
 const VIDEO_CODECS: Record<string, { vcodec: string; acodec: string }> = {
   mp4: { vcodec: 'libx264', acodec: 'aac' },
@@ -37,6 +45,17 @@ const VIDEO_CODECS: Record<string, { vcodec: string; acodec: string }> = {
   mov: { vcodec: 'libx264', acodec: 'aac' },
   mkv: { vcodec: 'libx264', acodec: 'aac' },
   avi: { vcodec: 'libx264', acodec: 'aac' },
+};
+
+// Audio codec mapping for different output formats
+const AUDIO_CODECS: Record<string, string> = {
+  mp3: 'libmp3lame',
+  aac: 'aac',
+  m4a: 'aac',
+  ogg: 'libvorbis',
+  flac: 'flac',
+  wav: 'pcm_s16le',
+  opus: 'libopus',
 };
 
 export class CompressionService {
@@ -55,6 +74,26 @@ export class CompressionService {
     const savedPercentage = (savedBytes / fileInfo.size) * 100;
     const duration = (Date.now() - startTime) / 1000;
 
+    // If output is not smaller than input, delete the output file
+    // This prevents creating files that are the same size or larger
+    if (outputSize >= fileInfo.size) {
+      try {
+        fs.unlinkSync(outputPath);
+      } catch {
+        // Ignore deletion errors
+      }
+      return {
+        inputPath: fileInfo.path,
+        outputPath: fileInfo.path, // Point back to original file
+        inputSize: fileInfo.size,
+        outputSize: fileInfo.size, // No change
+        savedBytes: 0,
+        savedPercentage: 0,
+        duration,
+        alreadyOptimized: true,
+      };
+    }
+
     return {
       inputPath: fileInfo.path,
       outputPath,
@@ -72,6 +111,14 @@ export class CompressionService {
 
   private getImageQuality(quality: QualityLevel): number {
     return IMAGE_QUALITY[quality] || IMAGE_QUALITY.medium;
+  }
+
+  private getAudioSettings(quality: QualityLevel) {
+    return AUDIO_SETTINGS[quality] || AUDIO_SETTINGS.medium;
+  }
+
+  private getAudioCodec(format: string): string {
+    return AUDIO_CODECS[format] || AUDIO_CODECS.mp3;
   }
 
   private getOutputFormat(fileInfo: FileInfo, advanced?: AdvancedSettings): string {
@@ -168,8 +215,8 @@ export class CompressionService {
         })
         .on('end', () => {
           const result = this.calculateResult(fileInfo, outputPath, startTime);
-          // Handle input file removal
-          if (settings.removeInputFile) {
+          // Handle input file removal (only if compression was successful)
+          if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
             result.inputFileRemoved = true;
           }
@@ -230,7 +277,7 @@ export class CompressionService {
         })
         .on('end', () => {
           const result = this.calculateResult(fileInfo, outputPath, startTime);
-          if (settings.removeInputFile) {
+          if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
             result.inputFileRemoved = true;
           }
@@ -294,7 +341,156 @@ export class CompressionService {
         .on('end', () => {
           onProgress({ percentage: 100 });
           const result = this.calculateResult(fileInfo, outputPath, startTime);
-          if (settings.removeInputFile) {
+          if (settings.removeInputFile && !result.alreadyOptimized) {
+            deleteFile(fileInfo.path);
+            result.inputFileRemoved = true;
+          }
+          resolve(result);
+        })
+        .on('error', (err) => {
+          reject(new Error(`FFmpeg error: ${err.message}`));
+        })
+        .save(outputPath);
+    });
+  }
+
+  // Get audio duration in seconds
+  private getAudioDuration(filePath: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(filePath, (err, metadata) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(metadata.format.duration || 0);
+        }
+      });
+    });
+  }
+
+  async compressAudio(
+    fileInfo: FileInfo,
+    settings: CompressionSettings,
+    onProgress: (progress: CompressionProgress) => void
+  ): Promise<CompressionResult> {
+    const startTime = Date.now();
+    const outputPath = generateOutputPath(fileInfo.path, settings.advanced);
+    const { bitrate } = this.getAudioSettings(settings.quality);
+    const outputFormat = this.getOutputFormat(fileInfo, settings.advanced);
+    const codec = this.getAudioCodec(outputFormat);
+
+    // Check if we need target size encoding
+    if (settings.advanced?.targetSize) {
+      return this.compressAudioWithTargetSize(
+        fileInfo,
+        settings,
+        outputPath,
+        startTime,
+        onProgress
+      );
+    }
+
+    return new Promise(async (resolve, reject) => {
+      let duration = 0;
+
+      try {
+        duration = await this.getAudioDuration(fileInfo.path);
+      } catch {
+        // Continue without duration for progress tracking
+      }
+
+      const command = ffmpeg(fileInfo.path);
+      const outputOptions: string[] = [];
+
+      // Set audio codec
+      outputOptions.push(`-c:a ${codec}`);
+
+      // Set bitrate based on format and quality
+      // FLAC and WAV are lossless, so we don't set bitrate
+      if (outputFormat !== 'flac' && outputFormat !== 'wav') {
+        outputOptions.push(`-b:a ${bitrate}k`);
+      }
+
+      // Format-specific options
+      if (outputFormat === 'ogg') {
+        // Vorbis quality setting (0-10)
+        const vorbisQuality = settings.quality === 'high' ? 8 : settings.quality === 'medium' ? 5 : 3;
+        outputOptions.push(`-q:a ${vorbisQuality}`);
+      }
+
+      command
+        .outputOptions(outputOptions)
+        .on('progress', (progress) => {
+          if (duration > 0 && progress.timemark) {
+            const currentTime = this.parseTimeToSeconds(progress.timemark);
+            const percentage = Math.min((currentTime / duration) * 100, 100);
+
+            onProgress({
+              percentage,
+              currentKbps: progress.currentKbps,
+            });
+          }
+        })
+        .on('end', () => {
+          const result = this.calculateResult(fileInfo, outputPath, startTime);
+          if (settings.removeInputFile && !result.alreadyOptimized) {
+            deleteFile(fileInfo.path);
+            result.inputFileRemoved = true;
+          }
+          resolve(result);
+        })
+        .on('error', (err) => {
+          reject(new Error(`FFmpeg error: ${err.message}`));
+        })
+        .save(outputPath);
+    });
+  }
+
+  // Audio compression with target file size
+  private async compressAudioWithTargetSize(
+    fileInfo: FileInfo,
+    settings: CompressionSettings,
+    outputPath: string,
+    startTime: number,
+    onProgress: (progress: CompressionProgress) => void
+  ): Promise<CompressionResult> {
+    const targetSize = settings.advanced!.targetSize!;
+    const duration = await this.getAudioDuration(fileInfo.path);
+    const outputFormat = this.getOutputFormat(fileInfo, settings.advanced);
+    const codec = this.getAudioCodec(outputFormat);
+
+    // Calculate target bitrate: (target bytes * 8) / duration in seconds / 1000 = kbps
+    const targetBitrate = Math.max(32, Math.floor((targetSize * 8) / duration / 1000));
+
+    return new Promise((resolve, reject) => {
+      const command = ffmpeg(fileInfo.path);
+      const outputOptions: string[] = [];
+
+      outputOptions.push(`-c:a ${codec}`);
+
+      // For lossless formats, we can't target a specific size
+      if (outputFormat === 'flac' || outputFormat === 'wav') {
+        // Fall back to standard compression
+        return this.compressAudio(fileInfo, settings, onProgress).then(resolve).catch(reject);
+      }
+
+      outputOptions.push(`-b:a ${targetBitrate}k`);
+
+      command
+        .outputOptions(outputOptions)
+        .on('progress', (progress) => {
+          if (duration > 0 && progress.timemark) {
+            const currentTime = this.parseTimeToSeconds(progress.timemark);
+            const percentage = Math.min((currentTime / duration) * 100, 100);
+
+            onProgress({
+              percentage,
+              currentKbps: progress.currentKbps,
+            });
+          }
+        })
+        .on('end', () => {
+          const result = this.calculateResult(fileInfo, outputPath, startTime);
+          if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
             result.inputFileRemoved = true;
           }
@@ -314,6 +510,8 @@ export class CompressionService {
   ): Promise<CompressionResult> {
     if (fileInfo.type === 'video') {
       return this.compressVideo(fileInfo, settings, onProgress);
+    } else if (fileInfo.type === 'audio') {
+      return this.compressAudio(fileInfo, settings, onProgress);
     } else {
       return this.compressImage(fileInfo, settings, onProgress);
     }

@@ -1,11 +1,12 @@
 export type QualityLevel = 'high' | 'medium' | 'low' | 'custom';
 
-export type FileType = 'video' | 'image';
+export type FileType = 'video' | 'image' | 'audio';
 
 // Supported output formats
 export type VideoFormat = 'mp4' | 'webm' | 'mov' | 'mkv' | 'avi';
 export type ImageFormat = 'jpg' | 'png' | 'webp' | 'gif';
-export type OutputFormat = VideoFormat | ImageFormat;
+export type AudioFormat = 'mp3' | 'aac' | 'wav' | 'ogg' | 'flac' | 'm4a';
+export type OutputFormat = VideoFormat | ImageFormat | AudioFormat;
 
 export interface QualityOption {
   label: string;
@@ -44,6 +45,7 @@ export interface CompressionResult {
   savedPercentage: number;
   duration: number;
   inputFileRemoved?: boolean;
+  alreadyOptimized?: boolean; // True if compression didn't reduce size (output file deleted)
 }
 
 export interface ProgressInfo {

@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { FileInfo, FileType, QualityLevel, VideoFormat, ImageFormat, OutputFormat, AdvancedSettings } from './types.js';
+import { FileInfo, FileType, QualityLevel, VideoFormat, ImageFormat, AudioFormat, OutputFormat, AdvancedSettings } from './types.js';
 
 // Format utilities
 export function formatBytes(bytes: number, decimals = 2): string {
@@ -76,6 +76,7 @@ export function getFFmpegInstallInstructions(): string {
 // File utilities
 const SUPPORTED_VIDEO_FORMATS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v'];
 const SUPPORTED_IMAGE_FORMATS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+const SUPPORTED_AUDIO_FORMATS = ['.mp3', '.aac', '.wav', '.ogg', '.flac', '.m4a', '.wma', '.opus'];
 
 export function getFileInfo(filePath: string): FileInfo | null {
   try {
@@ -100,6 +101,8 @@ export function getFileInfo(filePath: string): FileInfo | null {
       type = 'video';
     } else if (SUPPORTED_IMAGE_FORMATS.includes(ext)) {
       type = 'image';
+    } else if (SUPPORTED_AUDIO_FORMATS.includes(ext)) {
+      type = 'audio';
     }
 
     if (!type) {
@@ -120,7 +123,7 @@ export function getFileInfo(filePath: string): FileInfo | null {
 
 export function isSupportedFormat(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
-  return SUPPORTED_VIDEO_FORMATS.includes(ext) || SUPPORTED_IMAGE_FORMATS.includes(ext);
+  return SUPPORTED_VIDEO_FORMATS.includes(ext) || SUPPORTED_IMAGE_FORMATS.includes(ext) || SUPPORTED_AUDIO_FORMATS.includes(ext);
 }
 
 export function generateOutputPath(inputPath: string, advanced?: AdvancedSettings): string {
@@ -156,7 +159,7 @@ export function isValidDirectory(dirPath: string): boolean {
 }
 
 export function getSupportedFormats(): string {
-  return [...SUPPORTED_VIDEO_FORMATS, ...SUPPORTED_IMAGE_FORMATS]
+  return [...SUPPORTED_VIDEO_FORMATS, ...SUPPORTED_IMAGE_FORMATS, ...SUPPORTED_AUDIO_FORMATS]
     .map(ext => ext.replace('.', ''))
     .join(', ');
 }
@@ -181,9 +184,23 @@ export function getImageFormatOptions(): { value: ImageFormat; label: string; de
   ];
 }
 
+export function getAudioFormatOptions(): { value: AudioFormat; label: string; description: string }[] {
+  return [
+    { value: 'mp3', label: 'MP3', description: 'Universal compatibility, good compression' },
+    { value: 'aac', label: 'AAC', description: 'Better quality than MP3 at same bitrate' },
+    { value: 'm4a', label: 'M4A', description: 'Apple format, AAC in MP4 container' },
+    { value: 'ogg', label: 'OGG', description: 'Open format, excellent quality' },
+    { value: 'flac', label: 'FLAC', description: 'Lossless compression, larger files' },
+    { value: 'wav', label: 'WAV', description: 'Uncompressed, highest quality' },
+  ];
+}
+
 export function getFormatOptions(fileType: FileType): { value: OutputFormat; label: string; description: string }[] {
   if (fileType === 'video') {
     return getVideoFormatOptions();
+  }
+  if (fileType === 'audio') {
+    return getAudioFormatOptions();
   }
   return getImageFormatOptions();
 }
@@ -223,6 +240,24 @@ export function estimateCompressedSize(originalSize: number, quality: QualityLev
         break;
       default:
         compressionRatio = 0.65;
+    }
+  } else if (fileType === 'audio') {
+    // Audio compression estimates based on bitrate
+    switch (quality) {
+      case 'high':
+        // 320kbps: ~70-80% of original
+        compressionRatio = 0.75;
+        break;
+      case 'medium':
+        // 192kbps: ~45-55% of original
+        compressionRatio = 0.50;
+        break;
+      case 'low':
+        // 128kbps: ~30-40% of original
+        compressionRatio = 0.35;
+        break;
+      default:
+        compressionRatio = 0.50;
     }
   } else {
     // Image compression estimates

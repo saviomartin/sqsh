@@ -34,7 +34,7 @@ export const Welcome: React.FC = () => {
       <Text bold color="#ff6b4a">
         Sqsh
       </Text>
-      <Text color="#999999">Fast media compression for your terminal</Text>
+      <Text color="#999999">Fast video, image & audio compression for your terminal</Text>
     </Box>
   );
 };
@@ -80,13 +80,13 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFileSelected }) => {
       </Box>
       <Text color="yellow">📁 Paste file path:</Text>
       <Box marginTop={1}>
-        <Text color="#999999">Drag and drop the file or paste in the file path</Text>
+        <Text color="#999999">Supports video, image, and audio files (mp4, jpg, mp3, etc.)</Text>
       </Box>
       <Box marginTop={1} flexDirection="row" alignItems="center" paddingX={1} borderStyle="round" borderColor="gray">
         <Text color="white">{'> '}</Text>
         <Box flexGrow={1}>
           {showPlaceholder ? (
-            <Text color="#666666">/path/to/your/file.mp4</Text>
+            <Text color="#666666">/path/to/your/file</Text>
           ) : (
             <Text color="white">{displayValue}</Text>
           )}
@@ -108,28 +108,53 @@ interface QualitySelectProps {
   onSelect: (quality: QualityLevel) => void;
 }
 
-const qualityDetails: Record<QualityLevel, { label: string; description: string }> = {
-  high: {
-    label: 'High',
-    description: 'Minimal compression, best quality',
-  },
-  medium: {
-    label: 'Medium',
-    description: 'Balanced compression and quality',
-  },
-  low: {
-    label: 'Low',
-    description: 'Maximum compression, smaller file size',
-  },
-  custom: {
-    label: 'Custom',
-    description: 'Custom settings',
-  },
+// Quality descriptions by file type
+const getQualityDetails = (fileType: string): Record<QualityLevel, { label: string; description: string }> => {
+  if (fileType === 'audio') {
+    return {
+      high: {
+        label: 'High',
+        description: '320kbps - Near lossless audio quality',
+      },
+      medium: {
+        label: 'Medium',
+        description: '192kbps - Good quality, balanced size',
+      },
+      low: {
+        label: 'Low',
+        description: '128kbps - Smaller file, acceptable quality',
+      },
+      custom: {
+        label: 'Custom',
+        description: 'Custom settings',
+      },
+    };
+  }
+  // Default for video and image
+  return {
+    high: {
+      label: 'High',
+      description: 'Minimal compression, best quality',
+    },
+    medium: {
+      label: 'Medium',
+      description: 'Balanced compression and quality',
+    },
+    low: {
+      label: 'Low',
+      description: 'Maximum compression, smaller file size',
+    },
+    custom: {
+      label: 'Custom',
+      description: 'Custom settings',
+    },
+  };
 };
 
 export const QualitySelect: React.FC<QualitySelectProps> = ({ fileInfo, onSelect }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const qualityLevels: QualityLevel[] = ['high', 'medium', 'low'];
+  const qualityDetails = getQualityDetails(fileInfo.type);
 
   useInput((_input, key) => {
     if (key.upArrow) {
@@ -254,6 +279,101 @@ export const Summary: React.FC<SummaryProps> = ({ result }) => {
   const boxWidth = Math.min(terminalWidth - 2, 80); // Max 80, or terminal - 2
   const innerWidth = boxWidth - 4; // Space for "│ " and " │"
 
+  // Safe padding helper
+  const getPadding = (lineContent: string): string => {
+    const padding = innerWidth - stringWidth(lineContent);
+    return ' '.repeat(Math.max(0, padding));
+  };
+
+  const emptyInner = ' '.repeat(Math.max(0, innerWidth));
+
+  // Handle already optimized files - show special message
+  if (result.alreadyOptimized) {
+    const fileName = result.inputPath.split('/').pop() || 'file';
+    const displayFileName = truncateText(fileName, innerWidth - 10);
+    const inputMB = result.inputSize / (1024 * 1024);
+    const duration = Math.max(0, result.duration);
+    const timeText = duration < 60
+      ? `${duration.toFixed(duration < 1 ? 3 : 0)}s`
+      : formatDuration(duration);
+
+    const headerTitle = '╭─ Already Optimized ';
+    const headerDashes = '─'.repeat(Math.max(0, boxWidth - stringWidth(headerTitle) - 1));
+    const topBorder = headerTitle + headerDashes + '╮';
+    const bottomBorder = '╰' + '─'.repeat(Math.max(0, boxWidth - 2)) + '╯';
+
+    const line1 = `✨ ${displayFileName}`;
+    const line2 = `💾 ${inputMB.toFixed(2)} MB - already at optimal size`;
+    const line3 = `⚡ Checked in ${timeText}`;
+    const line4 = `📁 No new file created - original preserved`;
+
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text color="#fbbf24" bold>{topBorder}</Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text>{emptyInner}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text color="#fbbf24">✨ </Text>
+          <Text color="white">{displayFileName}</Text>
+          <Text>{getPadding(line1)}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text>{emptyInner}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text color="#60a5fa">💾 </Text>
+          <Text color="white">{inputMB.toFixed(2)} MB</Text>
+          <Text color="#999999"> - already at optimal size</Text>
+          <Text>{getPadding(line2)}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text color="#22c55e">⚡ </Text>
+          <Text color="white">Checked in </Text>
+          <Text color="#22c55e" bold>{timeText}</Text>
+          <Text>{getPadding(line3)}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text>{emptyInner}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text color="#22c55e">📁 </Text>
+          <Text color="#999999">No new file created - original preserved</Text>
+          <Text>{getPadding(line4)}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text>
+          <Text color="#fbbf24">│ </Text>
+          <Text>{emptyInner}</Text>
+          <Text color="#fbbf24"> │</Text>
+        </Text>
+
+        <Text color="#fbbf24" bold>{bottomBorder}</Text>
+      </Box>
+    );
+  }
+
   // Calculate file sizes with fallbacks
   const savedBytes = Math.abs(result.savedBytes);
   const savedMB = savedBytes / (1024 * 1024);
@@ -296,13 +416,6 @@ export const Summary: React.FC<SummaryProps> = ({ result }) => {
   const headerDashes = '─'.repeat(Math.max(0, boxWidth - stringWidth(headerTitle) - 1));
   const topBorder = headerTitle + headerDashes + '╮';
   const bottomBorder = '╰' + '─'.repeat(Math.max(0, boxWidth - 2)) + '╯';
-  const emptyInner = ' '.repeat(Math.max(0, innerWidth));
-
-  // Safe padding helper
-  const getPadding = (lineContent: string): string => {
-    const padding = innerWidth - stringWidth(lineContent);
-    return ' '.repeat(Math.max(0, padding));
-  };
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -713,7 +826,7 @@ export const AdvancedSettingsEditor: React.FC<AdvancedSettingsEditorProps> = ({
       {/* Step 3: File Format */}
       {step === 'file-format' && (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="cyan">🎬 Output format:</Text>
+          <Text color="cyan">{fileInfo.type === 'audio' ? '🎵' : fileInfo.type === 'video' ? '🎬' : '🖼️'} Output format:</Text>
           <Box marginTop={1} flexDirection="column">
             {formatOptions.map((format, index) => {
               const isSelected = selectedFormatIndex === index;
