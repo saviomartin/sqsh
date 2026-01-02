@@ -1,4 +1,4 @@
-# CompressX
+# Sqsh
 
 > Fast media compression for your terminal
 
@@ -42,12 +42,12 @@ Download from [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
 ### Global Installation (Recommended)
 
 ```bash
-npm install -g compressx
+npm install -g sqsh
 ```
 
 Then run:
 ```bash
-compressx
+sqsh
 ```
 
 ### Local Development
@@ -55,7 +55,7 @@ compressx
 ```bash
 # Clone the repository
 git clone <your-repo-url>
-cd compressx
+cd sqsh
 
 # Install dependencies
 npm install
@@ -75,7 +75,7 @@ npm start
 Simply run the command and follow the interactive prompts:
 
 ```bash
-compressx
+sqsh
 ```
 
 ### Step-by-Step Flow
@@ -94,7 +94,7 @@ Each completed step stays visible as you progress, creating a clean log of the p
 #### Example Output
 
 ```
-CompressX
+Sqsh
 
 > /path/to/video.mp4
 
@@ -113,8 +113,8 @@ CompressX
 ### Command Line Options
 
 ```bash
-compressx --help       # Show help message
-compressx --version    # Show version number
+sqsh --help       # Show help message
+sqsh --version    # Show version number
 ```
 
 ## Supported Formats
@@ -162,7 +162,7 @@ Output:   video-compressed.mp4
 ## Architecture
 
 ```
-compressx/
+sqsh/
 ├── src/
 │   ├── index.tsx              # Entry point with CLI args
 │   ├── App.tsx                # Main app with flow logic
@@ -208,7 +208,7 @@ npm run dev
 ### Test Locally
 ```bash
 npm link
-compressx
+sqsh
 ```
 
 ## Publishing to npm

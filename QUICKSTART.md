@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get up and running with compressx in under 2 minutes!
+Get up and running with sqsh in under 2 minutes!
 
 ## Step 1: Install FFmpeg
 
@@ -40,7 +40,7 @@ npm start
 
 ## Step 6: Link Globally (Optional)
 
-To use `compressx` command anywhere:
+To use `sqsh` command anywhere:
 
 ```bash
 npm link
@@ -48,7 +48,7 @@ npm link
 
 Now you can run:
 ```bash
-compressx
+sqsh
 ```
 
 ## Publishing to npm
@@ -69,12 +69,12 @@ compressx
 
 5. Install globally:
    ```bash
-   npm install -g compressx
+   npm install -g sqsh
    ```
 
 ## Usage Example
 
-1. Run `compressx`
+1. Run `sqsh`
 2. Drag and drop a video file (e.g., `video.mp4`)
 3. Press Enter
 4. Select quality using arrow keys

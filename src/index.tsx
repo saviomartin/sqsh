@@ -9,12 +9,12 @@ const args = process.argv.slice(2);
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
-CompressX - Fast media compression for your terminal
+Sqsh - Fast media compression for your terminal
 
 Usage:
-  compressx              Start the interactive CLI
-  compressx --help       Show this help message
-  compressx --version    Show version number
+  sqsh                  Start the interactive CLI
+  sqsh --help           Show this help message
+  sqsh --version        Show version number
 
 Supported formats:
   Videos: mp4, mov, avi, mkv, webm, flv, wmv, m4v
@@ -26,13 +26,13 @@ Requirements:
              or: sudo apt-get install ffmpeg (Linux)
 
 Examples:
-  Simply run 'compressx' and follow the interactive prompts.
+  Simply run 'sqsh' and follow the interactive prompts.
   `);
   process.exit(0);
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('CompressX v1.0.0');
+  console.log('Sqsh v1.0.0');
   process.exit(0);
 }
 

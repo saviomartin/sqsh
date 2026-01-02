@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useApp } from 'ink';
-import { Welcome } from './components/Welcome.js';
-import { FileDropper } from './components/FileDropper.js';
-import { QualitySelect } from './components/QualitySelect.js';
-import { Progress } from './components/Progress.js';
-import { Summary } from './components/Summary.js';
-import { CompressMore } from './components/CompressMore.js';
-import { ErrorBox } from './components/ErrorBox.js';
+import {
+  Welcome,
+  FileDropper,
+  QualitySelect,
+  Progress,
+  Summary,
+  CompressMore,
+  ErrorBox,
+} from './components.js';
 import { CompressionService } from './services/compression.js';
-import { checkFFmpegInstalled, getFFmpegInstallInstructions } from './utils/ffmpegCheck.js';
+import { checkFFmpegInstalled, getFFmpegInstallInstructions, formatBytes } from './utils.js';
 import {
   AppStep,
   FileInfo,
@@ -16,7 +18,8 @@ import {
   CompressionResult,
   CompressionSettings,
 } from './types.js';
-import { formatBytes } from './utils/formatBytes.js';
+
+const THANK_YOU_MESSAGE = 'Thank you for using Sqsh. Just type "sqsh" next time to compress any file.';
 
 export const App: React.FC = () => {
   const { exit } = useApp();
@@ -28,6 +31,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<{ title: string; message: string; instruction?: string } | null>(null);
   const [startTime, setStartTime] = useState(0);
   const [exitWarning, setExitWarning] = useState(false);
+  const [showThankYou, setShowThankYou] = useState(false);
 
   // Check FFmpeg on mount
   useEffect(() => {
@@ -44,10 +48,13 @@ export const App: React.FC = () => {
   useEffect(() => {
     let warningTimeout: NodeJS.Timeout;
 
-    const handleExit = () => {
+    const handleSigInt = (signal: string) => {
       if (exitWarning) {
-        // Second Ctrl+C - actually exit
-        exit();
+        // Second Ctrl+C - show thank you and exit
+        setShowThankYou(true);
+        setTimeout(() => {
+          process.exit(0);
+        }, 1000);
       } else {
         // First Ctrl+C - show warning
         setExitWarning(true);
@@ -59,12 +66,14 @@ export const App: React.FC = () => {
       }
     };
 
-    process.on('SIGINT', handleExit);
+    // Remove all existing SIGINT listeners to prevent default exit
+    process.removeAllListeners('SIGINT');
+    process.on('SIGINT', handleSigInt);
+
     return () => {
-      process.off('SIGINT', handleExit);
       if (warningTimeout) clearTimeout(warningTimeout);
     };
-  }, [exit, exitWarning]);
+  }, [exitWarning]);
 
   const handleFileSelected = (file: FileInfo) => {
     setFileInfo(file);
@@ -114,12 +123,25 @@ export const App: React.FC = () => {
   };
 
   const handleExit = () => {
-    exit();
+    // Always show thank you message when user chooses to exit
+    setShowThankYou(true);
+    setTimeout(() => {
+      process.exit(0);
+    }, 1000);
   };
 
   // Show error if FFmpeg is not installed
   if (error && !fileInfo) {
-    return <ErrorBox title={error.title} message={error.message} instruction={error.instruction} />;
+    return (
+      <Box flexDirection="column">
+        <ErrorBox title={error.title} message={error.message} instruction={error.instruction} />
+        {showThankYou && (
+          <Box marginTop={1}>
+            <Text color="gray">{THANK_YOU_MESSAGE}</Text>
+          </Box>
+        )}
+      </Box>
+    );
   }
 
   return (
@@ -128,32 +150,40 @@ export const App: React.FC = () => {
 
       {fileInfo && step !== 'file-input' && (
         <>
+          <Box marginTop={1} />
           <Text>
             <Text color="green">✓</Text>
             <Text> Selected: </Text>
             <Text color="cyan">{fileInfo.name}</Text>
-            <Text color="#666666"> ({formatBytes(fileInfo.size)})</Text>
+            <Text color="#999999"> ({formatBytes(fileInfo.size)} - {fileInfo.type.charAt(0).toUpperCase() + fileInfo.type.slice(1)})</Text>
           </Text>
-          <Box marginTop={1} />
         </>
       )}
 
       {quality && step !== 'quality-select' && step !== 'file-input' && (
-        <Text>
-          <Text color="green">✓</Text>
-          <Text> Quality: </Text>
-          <Text color="cyan">
-            {quality.charAt(0).toUpperCase() + quality.slice(1)}
+        <>
+          <Box marginTop={1} />
+          <Text>
+            <Text color="green">✓</Text>
+            <Text> Quality: </Text>
+            <Text color="cyan">
+              {quality.charAt(0).toUpperCase() + quality.slice(1)}
+            </Text>
           </Text>
-        </Text>
+        </>
       )}
 
       {step === 'file-input' && <FileDropper onFileSelected={handleFileSelected} />}
 
-      {step === 'quality-select' && <QualitySelect onSelect={handleQualitySelected} />}
+      {step === 'quality-select' && fileInfo && (
+        <QualitySelect fileInfo={fileInfo} onSelect={handleQualitySelected} />
+      )}
 
       {step === 'compressing' && fileInfo && (
-        <Progress percentage={progress} fileName={fileInfo.name} startTime={startTime} />
+        <>
+          <Box marginTop={1} />
+          <Progress percentage={progress} fileName={fileInfo.name} startTime={startTime} />
+        </>
       )}
 
       {step === 'compress-more' && result && (
@@ -171,7 +201,13 @@ export const App: React.FC = () => {
 
       {exitWarning && (
         <Box marginTop={1}>
-          <Text color="yellow">⚠️  Press Ctrl+C again to exit</Text>
+          <Text color="yellow">Press Ctrl+C again to exit</Text>
+        </Box>
+      )}
+
+      {showThankYou && (
+        <Box marginTop={1}>
+          <Text color="gray">{THANK_YOU_MESSAGE}</Text>
         </Box>
       )}
     </Box>
