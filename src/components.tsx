@@ -3,7 +3,7 @@ import { Box, Text, useInput, useStdout } from 'ink';
 import { ConfirmInput, Spinner } from '@inkjs/ui';
 import path from 'path';
 import stringWidth from 'string-width';
-import { QualityLevel, FileInfo, CompressionResult, AdvancedSettings, BatchFileInfo } from './types';
+import { QualityLevel, FileInfo, CompressionResult, AdvancedSettings, BatchFileInfo } from './types.js';
 import {
   getFileInfo,
   getFilesFromFolder,
@@ -19,7 +19,7 @@ import {
   validateBatchFiles,
   toBatchFiles,
   calculateTotalSize,
-} from './utils';
+} from './utils.js';
 
 
 // Divider component that extends to full terminal width

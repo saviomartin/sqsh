@@ -1,5 +1,9 @@
 # Sqsh
 
+[![npm version](https://img.shields.io/npm/v/sqsh.svg)](https://www.npmjs.com/package/sqsh)
+[![npm downloads](https://img.shields.io/npm/dm/sqsh.svg)](https://www.npmjs.com/package/sqsh)
+[![license](https://img.shields.io/npm/l/sqsh.svg)](https://github.com/saviomartin/sqsh/blob/main/LICENSE)
+
 Fast media compression for your terminal. Beautiful, interactive CLI tool powered by FFmpeg.
 
 **Repository:** [github.com/saviomartin/sqsh](https://github.com/saviomartin/sqsh)
