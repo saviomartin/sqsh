@@ -376,3 +376,30 @@ export function calculateTotalSize(files: FileInfo[]): number {
   return files.reduce((total, file) => total + file.size, 0);
 }
 
+/**
+ * Development helper to validate conditional rendering
+ * Use this during development to ensure all required data exists before rendering
+ * 
+ * @example
+ * if (!validateRenderCondition({ files, primaryFile, quality })) {
+ *   console.warn('Missing required data for render');
+ * }
+ */
+export function validateRenderCondition(conditions: Record<string, any>): boolean {
+  return Object.entries(conditions).every(([key, value]) => {
+    if (value === undefined || value === null) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[Render Validation] Missing required data: ${key}`);
+      }
+      return false;
+    }
+    if (Array.isArray(value) && value.length === 0) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[Render Validation] Empty array: ${key}`);
+      }
+      return false;
+    }
+    return true;
+  });
+}
+

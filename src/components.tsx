@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Box, Text, useInput, useStdout, Static } from 'ink';
 import { ConfirmInput, Spinner } from '@inkjs/ui';
 import path from 'path';
 import stringWidth from 'string-width';
@@ -33,8 +33,8 @@ const Divider: React.FC = () => {
   );
 };
 
-// Welcome component
-export const Welcome: React.FC = () => {
+// Welcome component - always renders content to stay visible
+export const Welcome: React.FC = React.memo(() => {
   const asciiArt = `                                        
 █▀▀▀ █▀▀█ █▀▀▀ █░░█
 ▀▀▀█ █░░█ ▀▀▀█ █▀▀█
@@ -42,13 +42,13 @@ export const Welcome: React.FC = () => {
 
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text color="#ff6b4a">
+      <Text color="#fff">
         {asciiArt}
       </Text>
       <Text color="#999999">Fast video, image & audio compression for your terminal</Text>
     </Box>
   );
-};
+});
 
 // FileDropper component - single file or folder drop
 interface FileDropperProps {

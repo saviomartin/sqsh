@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Text, useApp } from 'ink';
+import { Box, Text, useApp, Static } from 'ink';
 import {
   Welcome,
   FileDropper,
@@ -207,11 +207,28 @@ export const App: React.FC = () => {
   const singleResult = files.length === 1 && files[0].result ? files[0].result : null;
   const totalSize = calculateTotalSize(files);
 
+  /**
+   * IMPORTANT: Preventing Excessive Line Breaks Bug
+   * 
+   * This component uses conditional rendering with <Box marginTop={1} /> spacers.
+   * Each spacer Box MUST be inside a conditional that ensures it only renders when needed.
+   * 
+   * WARNING: If a parent conditional renders but a child Text component doesn't,
+   * you'll get empty Box spacers that create blank lines in the terminal.
+   * 
+   * Rules to prevent the bug:
+   * 1. Always wrap spacer Box + content in the SAME fragment
+   * 2. Ensure ALL data required for rendering exists in the condition
+   * 3. Check that nested conditionals don't create empty renders
+   * 4. Test edge cases like: no files, no quality, no settings
+   */
   return (
     <Box flexDirection="column">
-      <Welcome />
+      <Static items={[{ id: 'welcome' }]}>
+        {(item) => <Welcome key={item.id} />}
+      </Static>
 
-      {/* Show selected files summary */}
+      {/* Show selected files summary - IMPORTANT: Only show when files selected AND past file-input step */}
       {files.length > 0 && step !== 'file-input' && (
         <>
           <Box marginTop={1} />
@@ -233,6 +250,7 @@ export const App: React.FC = () => {
         </>
       )}
 
+      {/* Show quality selection - IMPORTANT: Only show when quality is set AND past quality-select step */}
       {quality && step !== 'quality-select' && step !== 'file-input' && (
         <>
           <Box marginTop={1} />
@@ -246,7 +264,7 @@ export const App: React.FC = () => {
         </>
       )}
 
-      {/* Show remove input selection */}
+      {/* Show remove input selection - IMPORTANT: Only show when past remove-input-prompt step */}
       {step !== 'file-input' && step !== 'quality-select' && step !== 'remove-input-prompt' && (
         <>
           <Box marginTop={1} />
@@ -258,9 +276,10 @@ export const App: React.FC = () => {
         </>
       )}
 
-      {/* Show advanced settings summary - each on its own line */}
+      {/* Show advanced settings summary - IMPORTANT: Each setting conditionally rendered to avoid empty boxes */}
       {advancedSettings && step !== 'advanced-settings' && step !== 'advanced-settings-prompt' && (
         <>
+          {/* Only render output folder line if it exists */}
           {advancedSettings.outputFolder && (
             <>
               <Box marginTop={1} />
@@ -271,6 +290,7 @@ export const App: React.FC = () => {
               </Text>
             </>
           )}
+          {/* Only render target size line if it exists and primaryFile is available */}
           {advancedSettings.targetSize && primaryFile && (
             <>
               <Box marginTop={1} />
@@ -283,6 +303,7 @@ export const App: React.FC = () => {
               </Text>
             </>
           )}
+          {/* Only render output format line if it exists */}
           {advancedSettings.outputFormat && (
             <>
               <Box marginTop={1} />
@@ -296,6 +317,7 @@ export const App: React.FC = () => {
         </>
       )}
 
+      {/* Step-based component rendering - IMPORTANT: Only ONE of these should render at a time */}
       {step === 'file-input' && <FileDropper onFilesSelected={handleFilesSelected} />}
 
       {step === 'quality-select' && primaryFile && (
@@ -314,7 +336,7 @@ export const App: React.FC = () => {
         <AdvancedSettingsEditor fileInfo={primaryFile} onComplete={handleAdvancedSettingsComplete} />
       )}
 
-      {/* Batch mode compression view */}
+      {/* Batch mode compression view - IMPORTANT: Only renders during 'compressing' step in batch mode */}
       {step === 'compressing' && isBatchMode && (
         <>
           <BatchFileList files={files} currentIndex={currentFileIndex} />
@@ -322,7 +344,7 @@ export const App: React.FC = () => {
         </>
       )}
 
-      {/* Single file compression view */}
+      {/* Single file compression view - IMPORTANT: Only renders during 'compressing' step in single-file mode */}
       {step === 'compressing' && !isBatchMode && primaryFile && (
         <>
           <Box marginTop={1} />
@@ -334,7 +356,7 @@ export const App: React.FC = () => {
         </>
       )}
 
-      {/* Batch mode results */}
+      {/* Batch mode results - IMPORTANT: Only renders after compression complete in batch mode */}
       {step === 'compress-more' && isBatchMode && (
         <>
           <BatchSummary files={files} startTime={startTime} />
@@ -342,7 +364,7 @@ export const App: React.FC = () => {
         </>
       )}
 
-      {/* Single file results */}
+      {/* Single file results - IMPORTANT: Only renders after compression complete in single-file mode */}
       {step === 'compress-more' && !isBatchMode && singleResult && (
         <>
           <Summary result={singleResult} />
