@@ -131,7 +131,18 @@ export function generateOutputPath(inputPath: string, advanced?: AdvancedSetting
   // Use custom format or keep original
   const outputExt = advanced?.outputFormat ? `.${advanced.outputFormat}` : ext;
 
-  return path.join(dir, `${basename}-compressed${outputExt}`);
+  // Base output name with -sqshed suffix
+  const baseOutputName = `${basename}-sqshed`;
+  let outputPath = path.join(dir, `${baseOutputName}${outputExt}`);
+
+  // Check for existing files and add incrementing suffix if needed
+  let counter = 1;
+  while (fs.existsSync(outputPath)) {
+    outputPath = path.join(dir, `${baseOutputName}-${counter}${outputExt}`);
+    counter++;
+  }
+
+  return outputPath;
 }
 
 // Validate if a directory exists
