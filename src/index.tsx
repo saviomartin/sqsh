@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
-import React from 'react';
+import React, { useState } from 'react';
 import { render } from 'ink';
 import { App } from './App.js';
+import { Setup } from './Setup.js';
+import { checkFFmpegInstalled } from './utils.js';
 
 // Handle command line arguments
 const args = process.argv.slice(2);
@@ -13,6 +15,8 @@ Sqsh - Fast media compression for your terminal
 
 Usage:
   sqsh                  Start the interactive CLI
+  sqsh setup            Run setup manually
+  sqsh setup --force    Run setup flow even if FFmpeg is installed
   sqsh --help           Show this help message
   sqsh --version        Show version number
 
@@ -36,5 +40,31 @@ if (args.includes('--version') || args.includes('-v')) {
   process.exit(0);
 }
 
-// Render the app
-render(<App />);
+// Main wrapper that handles setup -> app flow
+interface MainProps {
+  forceSetup?: boolean;
+}
+
+const Main: React.FC<MainProps> = ({ forceSetup = false }) => {
+  const isFFmpegInstalled = checkFFmpegInstalled();
+  const needsSetup = !isFFmpegInstalled || forceSetup;
+  const [showApp, setShowApp] = useState(!needsSetup);
+
+  const handleSetupComplete = () => {
+    setShowApp(true);
+  };
+
+  if (showApp) {
+    return <App />;
+  }
+
+  return <Setup forceSetup={forceSetup} onComplete={handleSetupComplete} />;
+};
+
+// Handle setup command or normal flow
+if (args[0] === 'setup') {
+  const forceSetup = args.includes('--force') || args.includes('-f');
+  render(<Main forceSetup={forceSetup} />);
+} else {
+  render(<Main />);
+}

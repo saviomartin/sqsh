@@ -13,7 +13,7 @@ import {
   AdvancedSettingsEditor,
 } from './components.js';
 import { CompressionService } from './services/compression.js';
-import { checkFFmpegInstalled, getFFmpegInstallInstructions, formatBytes, bytesToUnit, getFileSizeUnit } from './utils.js';
+import { formatBytes, bytesToUnit, getFileSizeUnit } from './utils.js';
 import {
   AppStep,
   FileInfo,
@@ -39,22 +39,11 @@ export const App: React.FC = () => {
   const [exitWarning, setExitWarning] = useState(false);
   const [showThankYou, setShowThankYou] = useState(false);
 
-  // Check FFmpeg on mount
-  useEffect(() => {
-    if (!checkFFmpegInstalled()) {
-      setError({
-        title: 'FFmpeg Not Found',
-        message: 'FFmpeg is required to compress media files.',
-        instruction: `Install it using: ${getFFmpegInstallInstructions()}`,
-      });
-    }
-  }, []);
-
   // Handle Ctrl+C gracefully with double-press confirmation
   useEffect(() => {
     let warningTimeout: NodeJS.Timeout;
 
-    const handleSigInt = (signal: string) => {
+    const handleSigInt = () => {
       if (exitWarning) {
         // Second Ctrl+C - show thank you and exit
         setShowThankYou(true);
