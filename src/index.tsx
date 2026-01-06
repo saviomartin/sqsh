@@ -39,7 +39,7 @@ Examples:
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('Sqsh v1.0.2');
+  console.log('Sqsh v1.0.3');
   process.exit(0);
 }
 
