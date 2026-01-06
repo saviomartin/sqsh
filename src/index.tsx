@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { render } from 'ink';
 import { App } from './App.js';
 import { Setup } from './Setup.js';
+import { AutoCompress } from './AutoCompress.js';
 import { checkFFmpegInstalled } from './utils.js';
 
 // Handle command line arguments
@@ -15,6 +16,7 @@ Sqsh - Fast media compression for your terminal
 
 Usage:
   sqsh                  Start the interactive CLI
+  sqsh auto <file>      Quick compress a single file (medium quality, no questions)
   sqsh setup            Run setup manually
   sqsh setup --force    Run setup flow even if FFmpeg is installed
   sqsh --help           Show this help message
@@ -30,13 +32,14 @@ Requirements:
              or: sudo apt-get install ffmpeg (Linux)
 
 Examples:
-  Simply run 'sqsh' and follow the interactive prompts.
+  sqsh                           Start interactive mode
+  sqsh auto /path/to/video.mp4   Quick compress with defaults
   `);
   process.exit(0);
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('Sqsh v1.0.0');
+  console.log('Sqsh v1.0.2');
   process.exit(0);
 }
 
@@ -61,10 +64,28 @@ const Main: React.FC<MainProps> = ({ forceSetup = false }) => {
   return <Setup forceSetup={forceSetup} onComplete={handleSetupComplete} />;
 };
 
-// Handle setup command or normal flow
+// Handle commands
 if (args[0] === 'setup') {
   const forceSetup = args.includes('--force') || args.includes('-f');
   render(<Main forceSetup={forceSetup} />);
+} else if (args[0] === 'auto') {
+  // Auto compress command - quick compression with defaults
+  const filePath = args.slice(1).join(' '); // Join in case path has spaces
+
+  if (!filePath) {
+    console.log('Usage: sqsh auto <file>');
+    console.log('Example: sqsh auto /path/to/video.mp4');
+    process.exit(1);
+  }
+
+  // Check FFmpeg first
+  if (!checkFFmpegInstalled()) {
+    console.log('Error: FFmpeg is not installed.');
+    console.log('Install via: brew install ffmpeg (macOS) or sudo apt-get install ffmpeg (Linux)');
+    process.exit(1);
+  }
+
+  render(<AutoCompress filePath={filePath} />);
 } else {
   render(<Main />);
 }

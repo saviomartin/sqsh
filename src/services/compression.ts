@@ -67,16 +67,17 @@ export class CompressionService {
   private calculateResult(
     fileInfo: FileInfo,
     outputPath: string,
-    startTime: number
+    startTime: number,
+    isFormatConversion: boolean = false
   ): CompressionResult {
     const outputSize = fs.statSync(outputPath).size;
     const savedBytes = fileInfo.size - outputSize;
     const savedPercentage = (savedBytes / fileInfo.size) * 100;
     const duration = (Date.now() - startTime) / 1000;
 
-    // If output is not smaller than input, delete the output file
-    // This prevents creating files that are the same size or larger
-    if (outputSize >= fileInfo.size) {
+    // For format conversion, keep the file even if it's not smaller
+    // Only delete if it's compression and the file didn't get smaller
+    if (!isFormatConversion && outputSize >= fileInfo.size) {
       try {
         fs.unlinkSync(outputPath);
       } catch {
@@ -214,7 +215,8 @@ export class CompressionService {
           }
         })
         .on('end', () => {
-          const result = this.calculateResult(fileInfo, outputPath, startTime);
+          const isFormatConversion = outputFormat !== fileInfo.extension;
+          const result = this.calculateResult(fileInfo, outputPath, startTime, isFormatConversion);
           // Handle input file removal (only if compression was successful)
           if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
@@ -276,7 +278,8 @@ export class CompressionService {
           }
         })
         .on('end', () => {
-          const result = this.calculateResult(fileInfo, outputPath, startTime);
+          const isFormatConversion = outputFormat !== fileInfo.extension;
+          const result = this.calculateResult(fileInfo, outputPath, startTime, isFormatConversion);
           if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
             result.inputFileRemoved = true;
@@ -340,7 +343,8 @@ export class CompressionService {
         .on('progress', () => onProgress({ percentage: 70 }))
         .on('end', () => {
           onProgress({ percentage: 100 });
-          const result = this.calculateResult(fileInfo, outputPath, startTime);
+          const isFormatConversion = outputFormat !== fileInfo.extension;
+          const result = this.calculateResult(fileInfo, outputPath, startTime, isFormatConversion);
           if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
             result.inputFileRemoved = true;
@@ -431,7 +435,8 @@ export class CompressionService {
           }
         })
         .on('end', () => {
-          const result = this.calculateResult(fileInfo, outputPath, startTime);
+          const isFormatConversion = outputFormat !== fileInfo.extension;
+          const result = this.calculateResult(fileInfo, outputPath, startTime, isFormatConversion);
           if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
             result.inputFileRemoved = true;
@@ -488,7 +493,8 @@ export class CompressionService {
           }
         })
         .on('end', () => {
-          const result = this.calculateResult(fileInfo, outputPath, startTime);
+          const isFormatConversion = outputFormat !== fileInfo.extension;
+          const result = this.calculateResult(fileInfo, outputPath, startTime, isFormatConversion);
           if (settings.removeInputFile && !result.alreadyOptimized) {
             deleteFile(fileInfo.path);
             result.inputFileRemoved = true;
