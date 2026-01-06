@@ -60,6 +60,7 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
   const [droppedFiles, setDroppedFiles] = useState<FileInfo[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [folderName, setFolderName] = useState<string | null>(null);
+  const [inputTimeout, setInputTimeout] = useState<NodeJS.Timeout | null>(null);
 
   // Validate files whenever they change
   useEffect(() => {
@@ -78,18 +79,27 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
 
   // Process a dropped path - could be a file or folder
   const processPath = useCallback((rawPath: string) => {
+    // Clear any pending timeout
+    if (inputTimeout) {
+      clearTimeout(inputTimeout);
+      setInputTimeout(null);
+    }
+
     const cleanPath = rawPath.trim().replace(/^["']|["']$/g, '');
     if (!cleanPath) return;
+
+    // Debug: Show what path we're trying to process (for very long paths, truncate for display)
+    const displayPath = cleanPath.length > 100 ? cleanPath.substring(0, 50) + '...' + cleanPath.substring(cleanPath.length - 20) : cleanPath;
 
     // Check if it's a directory
     if (isDirectory(cleanPath)) {
       const folderFiles = getFilesFromFolder(cleanPath);
-      
+
       if (folderFiles.length === 0) {
-        setError('No supported files found in folder');
+        setError(`No supported files found in folder: ${displayPath}`);
         return;
       }
-      
+
       // Set all files from the folder
       setDroppedFiles(folderFiles);
       setFolderName(cleanPath.split('/').pop() || 'folder');
@@ -108,6 +118,10 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
         return [...prev, fileInfo];
       });
       setFolderName(null);
+      setError(null);
+    } else {
+      // File not found or not supported
+      setError(`File not found or unsupported format: ${displayPath}`);
     }
   }, []);
 
@@ -122,16 +136,22 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
   useInput((input, key) => {
     // Enter: Submit files
     if (key.return) {
+      // Clear any pending timeout
+      if (inputTimeout) {
+        clearTimeout(inputTimeout);
+        setInputTimeout(null);
+      }
+
       // Process any pending input first
       if (inputValue.trim()) {
         processPath(inputValue);
         setInputValue('');
       }
-      
+
       // Small delay to let state update
       setTimeout(() => {
         if (droppedFiles.length === 0) {
-          setError('Drop a file or folder first');
+          setError('Drop a file or folder first, or paste its path and press Enter');
           return;
         }
 
@@ -149,6 +169,12 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
 
     // Backspace: Remove last file or clear input
     if (key.backspace || key.delete) {
+      // Clear any pending timeout
+      if (inputTimeout) {
+        clearTimeout(inputTimeout);
+        setInputTimeout(null);
+      }
+
       if (inputValue.length > 0) {
         setInputValue(prev => prev.slice(0, -1));
       } else if (droppedFiles.length > 0) {
@@ -159,6 +185,12 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
 
     // Escape: Clear everything
     if (key.escape) {
+      // Clear any pending timeout
+      if (inputTimeout) {
+        clearTimeout(inputTimeout);
+        setInputTimeout(null);
+      }
+
       setDroppedFiles([]);
       setInputValue('');
       setFolderName(null);
@@ -168,15 +200,35 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
 
     // Regular text input - accumulate for path
     if (input && !key.ctrl && !key.meta) {
+      // Clear any existing timeout
+      if (inputTimeout) {
+        clearTimeout(inputTimeout);
+      }
+
       const newValue = inputValue + input;
       setInputValue(newValue);
-      
-      // Check if we have a complete path (ends with supported extension or is a directory)
+
+      // Check if we have a complete path
       const cleanPath = newValue.trim().replace(/^["']|["']$/g, '');
-      if (cleanPath && (getFileInfo(cleanPath) || isDirectory(cleanPath))) {
+
+      // For very long inputs, also check periodically if we have a valid path
+      // This helps with pasted paths that might be very long
+      if (cleanPath.length > 10 && (getFileInfo(cleanPath) || isDirectory(cleanPath))) {
         processPath(cleanPath);
         setInputValue('');
+        return;
       }
+
+      // Set a timeout to process the path after a short delay
+      // This helps catch paths that might not be detected by the immediate check
+      const timeout = setTimeout(() => {
+        if (cleanPath && (getFileInfo(cleanPath) || isDirectory(cleanPath))) {
+          processPath(cleanPath);
+          setInputValue('');
+        }
+      }, 500); // Wait 500ms after last input before processing
+
+      setInputTimeout(timeout);
     }
   });
 
@@ -202,8 +254,23 @@ export const FileDropper: React.FC<FileDropperProps> = ({ onFilesSelected }) => 
       {/* Main drop zone message */}
       <Text color="yellow" bold>📁 Drop a file or folder</Text>
       <Box marginTop={1}>
-        <Text color="#999999">Drop files one by one, or a folder for batch processing</Text>
+        <Text color="#999999">Drop files one by one, paste paths, or a folder for batch processing</Text>
       </Box>
+      <Box marginTop={1}>
+        <Text color="#666666">💡 Tip: Drag files from Finder and drop them here, or copy-paste the file path</Text>
+      </Box>
+
+      {/* Show input prompt when no files are selected */}
+      {droppedFiles.length === 0 && !error && (
+        <Box marginTop={1}>
+          <Text color="#666666">Or paste the file/folder path here:</Text>
+          <Box marginTop={1}>
+            <Text color="cyan">
+              {inputValue || <Text color="#444444">(empty - paste your file path)</Text>}
+            </Text>
+          </Box>
+        </Box>
+      )}
 
       {/* Dropped files list */}
       {droppedFiles.length > 0 && (

@@ -59,9 +59,50 @@ const AUDIO_CODECS: Record<string, string> = {
 };
 
 export class CompressionService {
+  private readonly LARGE_FILE_THRESHOLD = 500 * 1024 * 1024; // 500MB
+  private readonly EXTRA_LARGE_FILE_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2GB
+  private progressInterval?: NodeJS.Timeout;
+  private lastProgressUpdate = 0;
+
   private parseTimeToSeconds(timeString: string): number {
     const parts = timeString.split(':');
     return parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseFloat(parts[2]);
+  }
+
+  private isLargeFile(fileSize: number): boolean {
+    return fileSize > this.LARGE_FILE_THRESHOLD;
+  }
+
+  private isExtraLargeFile(fileSize: number): boolean {
+    return fileSize > this.EXTRA_LARGE_FILE_THRESHOLD;
+  }
+
+  private startProgressHeartbeat(onProgress: (progress: CompressionProgress) => void, fileSize: number): void {
+    if (this.isLargeFile(fileSize)) {
+      // For large files, send periodic progress updates to show the process is alive
+      this.progressInterval = setInterval(() => {
+        const now = Date.now();
+        // Only send heartbeat if we haven't had a real update in 30 seconds
+        if (now - this.lastProgressUpdate > 30000) {
+          onProgress({
+            percentage: Math.max(1, this.lastProgressUpdate / 100), // Small progress to show activity
+            currentFps: undefined,
+            currentKbps: undefined,
+          });
+        }
+      }, 10000); // Check every 10 seconds
+    }
+  }
+
+  private stopProgressHeartbeat(): void {
+    if (this.progressInterval) {
+      clearInterval(this.progressInterval);
+      this.progressInterval = undefined;
+    }
+  }
+
+  private updateLastProgress(): void {
+    this.lastProgressUpdate = Date.now();
   }
 
   private calculateResult(
@@ -181,16 +222,40 @@ export class CompressionService {
     return new Promise((resolve, reject) => {
       let duration = 0;
 
+      // Start progress heartbeat for large files
+      this.startProgressHeartbeat(onProgress, fileInfo.size);
+
       const command = ffmpeg(fileInfo.path);
 
-      // Build output options based on format
+      // Build output options based on format and file size
       const outputOptions = [
         `-c:v ${vcodec}`,
         `-crf ${settings.crf || crf}`,
-        `-preset ${preset}`,
         `-c:a ${acodec}`,
         `-b:a 128k`,
       ];
+
+      // Optimize settings for large files
+      if (this.isLargeFile(fileInfo.size)) {
+        // Use slower preset for better compression on large files
+        const largeFilePreset = this.isExtraLargeFile(fileInfo.size) ? 'veryslow' : 'slow';
+        outputOptions.push(`-preset ${largeFilePreset}`);
+
+        // Increase buffer sizes for large files
+        outputOptions.push('-bufsize 64M');
+        outputOptions.push('-maxrate 10M');
+
+        // Use threading for better performance on large files
+        outputOptions.push('-threads 0'); // Auto-detect optimal thread count
+
+        // Add timeout for extremely large files
+        if (this.isExtraLargeFile(fileInfo.size)) {
+          command.inputOptions(['-timelimit', '3600']); // 1 hour timeout
+        }
+      } else {
+        // Standard preset for smaller files
+        outputOptions.push(`-preset ${preset}`);
+      }
 
       // Add format-specific options
       if (outputFormat === 'webm') {
@@ -203,6 +268,8 @@ export class CompressionService {
           duration = this.parseTimeToSeconds(data.duration);
         })
         .on('progress', (progress) => {
+          this.updateLastProgress();
+
           if (duration > 0 && progress.timemark) {
             const currentTime = this.parseTimeToSeconds(progress.timemark);
             const percentage = Math.min((currentTime / duration) * 100, 100);
@@ -212,9 +279,17 @@ export class CompressionService {
               currentFps: progress.currentFps,
               currentKbps: progress.currentKbps,
             });
+          } else if (this.isLargeFile(fileInfo.size)) {
+            // For large files, provide some progress feedback even without timemark
+            onProgress({
+              percentage: Math.max(progress.percent || 0, 1), // At least 1% to show it's working
+              currentFps: progress.currentFps,
+              currentKbps: progress.currentKbps,
+            });
           }
         })
         .on('end', () => {
+          this.stopProgressHeartbeat();
           const isFormatConversion = outputFormat !== fileInfo.extension;
           const result = this.calculateResult(fileInfo, outputPath, startTime, isFormatConversion);
           // Handle input file removal (only if compression was successful)
@@ -225,7 +300,15 @@ export class CompressionService {
           resolve(result);
         })
         .on('error', (err) => {
-          reject(new Error(`FFmpeg error: ${err.message}`));
+          this.stopProgressHeartbeat();
+          // Provide more specific error messages for large files
+          if (this.isLargeFile(fileInfo.size) && err.message.includes('memory')) {
+            reject(new Error(`Large file compression failed due to memory constraints. Try reducing quality settings or processing smaller files.`));
+          } else if (this.isExtraLargeFile(fileInfo.size) && err.message.includes('timeout')) {
+            reject(new Error(`Extra large file compression timed out. Files over 2GB may take very long to process.`));
+          } else {
+            reject(new Error(`FFmpeg error: ${err.message}`));
+          }
         })
         .save(outputPath);
     });
@@ -246,18 +329,39 @@ export class CompressionService {
     const { vcodec, acodec } = this.getVideoCodecs(outputFormat);
     const { preset } = this.getVideoSettings(settings.quality);
 
+    // For very large files with target size, validate the target is reasonable
+    if (this.isExtraLargeFile(fileInfo.size) && targetSize > fileInfo.size * 0.8) {
+      throw new Error(`Target size (${Math.round(targetSize / 1024 / 1024)}MB) is too close to original size (${Math.round(fileInfo.size / 1024 / 1024)}MB) for large files. Try a smaller target size.`);
+    }
+
     return new Promise((resolve, reject) => {
+      // Start progress heartbeat for large files
+      this.startProgressHeartbeat(onProgress, fileInfo.size);
+
       const command = ffmpeg(fileInfo.path);
 
       const outputOptions = [
         `-c:v ${vcodec}`,
         `-b:v ${targetBitrate}k`,
         `-maxrate ${Math.floor(targetBitrate * 1.5)}k`,
-        `-bufsize ${Math.floor(targetBitrate * 2)}k`,
-        `-preset ${preset}`,
         `-c:a ${acodec}`,
         `-b:a 128k`,
       ];
+
+      // Optimize for large files
+      if (this.isLargeFile(fileInfo.size)) {
+        const largeFilePreset = this.isExtraLargeFile(fileInfo.size) ? 'veryslow' : 'slow';
+        outputOptions.push(`-preset ${largeFilePreset}`);
+        outputOptions.push('-bufsize 128M'); // Larger buffer for target size encoding
+        outputOptions.push('-threads 0');
+
+        if (this.isExtraLargeFile(fileInfo.size)) {
+          command.inputOptions(['-timelimit', '7200']); // 2 hour timeout for target size
+        }
+      } else {
+        outputOptions.push(`-preset ${preset}`);
+        outputOptions.push(`-bufsize ${Math.floor(targetBitrate * 2)}k`);
+      }
 
       if (outputFormat === 'webm') {
         outputOptions.push('-deadline good');
@@ -266,6 +370,8 @@ export class CompressionService {
       command
         .outputOptions(outputOptions)
         .on('progress', (progress) => {
+          this.updateLastProgress();
+
           if (duration > 0 && progress.timemark) {
             const currentTime = this.parseTimeToSeconds(progress.timemark);
             const percentage = Math.min((currentTime / duration) * 100, 100);
@@ -275,9 +381,17 @@ export class CompressionService {
               currentFps: progress.currentFps,
               currentKbps: progress.currentKbps,
             });
+          } else if (this.isLargeFile(fileInfo.size)) {
+            // For large files, provide some progress feedback even without timemark
+            onProgress({
+              percentage: Math.max(progress.percent || 0, 1),
+              currentFps: progress.currentFps,
+              currentKbps: progress.currentKbps,
+            });
           }
         })
         .on('end', () => {
+          this.stopProgressHeartbeat();
           const isFormatConversion = outputFormat !== fileInfo.extension;
           const result = this.calculateResult(fileInfo, outputPath, startTime, isFormatConversion);
           if (settings.removeInputFile && !result.alreadyOptimized) {
@@ -287,7 +401,15 @@ export class CompressionService {
           resolve(result);
         })
         .on('error', (err) => {
-          reject(new Error(`FFmpeg error: ${err.message}`));
+          this.stopProgressHeartbeat();
+          // Provide more specific error messages for large files
+          if (this.isLargeFile(fileInfo.size) && err.message.includes('memory')) {
+            reject(new Error(`Large file compression failed due to memory constraints. Try reducing target size or quality settings.`));
+          } else if (this.isExtraLargeFile(fileInfo.size) && err.message.includes('timeout')) {
+            reject(new Error(`Extra large file compression timed out. Files over 2GB with target size encoding may take very long to process.`));
+          } else {
+            reject(new Error(`FFmpeg error: ${err.message}`));
+          }
         })
         .save(outputPath);
     });

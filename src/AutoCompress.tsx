@@ -31,13 +31,26 @@ export const AutoCompress: React.FC<AutoCompressProps> = ({ filePath }) => {
         return;
       }
 
+      // Check for extremely large files and warn user
+      const LARGE_FILE_THRESHOLD = 500 * 1024 * 1024; // 500MB
+      const EXTRA_LARGE_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2GB
+
+      if (info.size > EXTRA_LARGE_THRESHOLD) {
+        console.log(`⚠️  Warning: File size (${(info.size / 1024 / 1024 / 1024).toFixed(1)}GB) is very large.`);
+        console.log('   Compression may take a long time and require significant system resources.');
+        console.log('   Consider using lower quality settings or splitting the file if possible.');
+      } else if (info.size > LARGE_FILE_THRESHOLD) {
+        console.log(`ℹ️  Large file detected (${(info.size / 1024 / 1024).toFixed(1)}MB).`);
+        console.log('   Using optimized settings for better performance.');
+      }
+
       setFileInfo(info);
       setStep('compressing');
       setStartTime(Date.now());
 
-      // Compression settings: medium quality, keep original, no advanced settings
+      // Compression settings: low quality, keep original, no advanced settings
       const settings: CompressionSettings = {
-        quality: 'medium',
+        quality: 'low',
         removeInputFile: false,
       };
 
@@ -70,7 +83,7 @@ export const AutoCompress: React.FC<AutoCompressProps> = ({ filePath }) => {
       {/* Header */}
       <Box marginBottom={1}>
         <Text bold color="cyan">Sqsh Auto</Text>
-        <Text color="gray"> - Quick compress with medium quality</Text>
+        <Text color="gray"> - Quick compress with low quality</Text>
       </Box>
 
       {/* File info */}
