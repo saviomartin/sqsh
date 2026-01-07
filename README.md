@@ -6,7 +6,9 @@
 
 Fast media compression for your terminal. Beautiful, interactive CLI tool powered by FFmpeg.
 
-**Repository:** [github.com/saviomartin/sqsh](https://github.com/saviomartin/sqsh)
+<video src="demo.mp4" controls width="100%">
+  Your browser does not support the video tag.
+</video>
 
 ## Installation
 
@@ -34,15 +36,13 @@ FFmpeg must be installed:
 - 📹 Video compression (MP4, MOV, AVI, MKV, WebM, etc.)
 - 🖼️ Image compression (JPG, PNG, GIF, WebP, BMP)
 - 🎵 Audio compression (MP3, AAC, WAV, OGG, FLAC, M4A)
-- ⚡ Fast FFmpeg-based compression
-- 📊 Real-time progress tracking
 - 🎯 Multiple quality presets
 - 📁 Batch processing support
 - 🎛️ Advanced settings (target size, format conversion, custom output folder)
 
 ## Usage
 
-Simply run `sqsh` and follow the interactive prompts. Compressed files are saved with a `-sqshed` suffix in the same directory (or your chosen output folder).
+Simply run `sqsh` and follow the interactive prompts. Compressed files are saved with a `-sqshed` suffix in the same directory (or your chosen output folder). Run `sqsh auto {drop_your_media}` to compress files skipping questions.
 
 ## License
 
